@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+# GitHub's Windows runner may expose a cp1252 console even when the repository
+# and Python sources are UTF-8. Keep Chinese diagnostics portable.
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 FORBIDDEN_TRACKED = {
     ".env",
     "data/cache.json",
