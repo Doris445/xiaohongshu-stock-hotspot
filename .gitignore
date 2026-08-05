@@ -1,0 +1,42 @@
+# Python / environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*.json
+cookies*.json
+*cookie*.txt
+
+# Local agent/browser state — never publish
+.agent-reach/
+.codex/
+.claude/
+browser-data/
+chrome-profile/
+
+# Runtime data may include authors, signed URLs and OCR text
+data/cache.json
+data/xhs_samples.json
+data/*.tmp
+
+# Logs and local visual QA artifacts
+*.log
+audit/
+screenshots/
+.gh-auth-*.txt
+
+# Editors / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

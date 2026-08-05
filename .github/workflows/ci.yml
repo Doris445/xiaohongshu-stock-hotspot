@@ -1,0 +1,24 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    env:
+      STOCK_DASHBOARD_DISABLE_NETWORK: "1"
+      SENTIBOARD_LLM_PROVIDER: local-keywords
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: python -m pip install -e .
+      - run: python -m unittest -v test_dashboard.py
+      - run: node --check static/app.js
+      - run: python scripts/privacy_check.py

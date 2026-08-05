@@ -1,0 +1,195 @@
+{
+  "meta": {
+    "mode": "demo",
+    "modeLabel": "演示数据",
+    "updatedAt": "2026-08-05T09:15:00+08:00",
+    "updatedLabel": "08月05日 09:15",
+    "xhsBackend": null,
+    "xhsStatus": "off",
+    "xhsMessage": "等待配置小红书只读后端",
+    "marketStatus": "snapshot",
+    "marketSource": "本地行情快照",
+    "window": "近 7 天",
+    "disclaimer": "情绪结果仅用于信息整理，不构成投资建议"
+  },
+  "summary": {
+    "posts": 11525,
+    "comments": 27253,
+    "bullRatio": 70,
+    "sentimentScore": 48
+  },
+  "sectors": [
+    {
+      "rank": 1,
+      "name": "半导体",
+      "posts": 2860,
+      "comments": 7124,
+      "score": 62,
+      "sentiment": "看多",
+      "change": 18,
+      "keywords": ["国产替代", "存储周期", "先进制程"],
+      "topPosts": [
+        {"title": "半导体这一轮更像产业周期，不只是情绪", "content": "演示摘要：作者从库存、价格与资本开支三个角度梳理行业变化，观点偏多，但提醒估值分化。", "author": "周期观察室", "likes": 3280, "comments": 426, "sentiment": "看多", "published": "2小时前", "url": ""},
+        {"title": "国产替代的关键变量，我只看这三条", "content": "演示摘要：围绕设备、材料与晶圆制造讨论订单能见度，评论区对兑现节奏有明显分歧。", "author": "阿尔法手记", "likes": 2416, "comments": 581, "sentiment": "看多", "published": "昨天", "url": ""},
+        {"title": "芯片很热，但别忽略高估值回撤", "content": "演示摘要：认为产业趋势仍在，短期交易拥挤度偏高，建议区分基本面与题材。", "author": "认真看财报", "likes": 1894, "comments": 693, "sentiment": "中性", "published": "昨天", "url": ""}
+      ]
+    },
+    {
+      "rank": 2,
+      "name": "CPO",
+      "posts": 2318,
+      "comments": 5830,
+      "score": 74,
+      "sentiment": "看多",
+      "change": 31,
+      "keywords": ["800G", "1.6T", "数据中心"],
+      "topPosts": [
+        {"title": "CPO 为什么重新回到讨论中心", "content": "演示摘要：从算力集群互连需求切入，梳理 800G 到 1.6T 的升级路径，整体观点积极。", "author": "光模块研究员", "likes": 4128, "comments": 720, "sentiment": "看多", "published": "3小时前", "url": ""},
+        {"title": "光模块业绩到底还能走多久？", "content": "演示摘要：用订单、产能与毛利率做情景分析，看多产业景气但担心一致预期过强。", "author": "成长股笔记", "likes": 2980, "comments": 846, "sentiment": "看多", "published": "6小时前", "url": ""},
+        {"title": "CPO 高位震荡，我的仓位处理", "content": "演示摘要：偏交易视角，强调波动与止损，评论区空多双方讨论激烈。", "author": "小仓位实验", "likes": 2136, "comments": 933, "sentiment": "中性", "published": "昨天", "url": ""}
+      ]
+    },
+    {
+      "rank": 3,
+      "name": "光通信",
+      "posts": 1984,
+      "comments": 4256,
+      "score": 58,
+      "sentiment": "看多",
+      "change": 22,
+      "keywords": ["光模块", "硅光", "海外需求"],
+      "topPosts": [
+        {"title": "光通信产业链一张图看懂", "content": "演示摘要：拆分上游光芯片、中游模块和下游云厂商，讨论热度集中在产能兑现。", "author": "产业链地图", "likes": 3620, "comments": 391, "sentiment": "看多", "published": "5小时前", "url": ""},
+        {"title": "硅光不是概念，先看良率", "content": "演示摘要：强调量产良率与客户验证周期，长期偏多，短期观点谨慎。", "author": "硬科技搬砖人", "likes": 2281, "comments": 542, "sentiment": "中性", "published": "昨天", "url": ""},
+        {"title": "海外算力需求对国内供应链的映射", "content": "演示摘要：梳理海外资本开支到国内订单的传导关系，认为景气仍有延续性。", "author": "Global Tech", "likes": 2044, "comments": 438, "sentiment": "看多", "published": "2天前", "url": ""}
+      ]
+    },
+    {
+      "rank": 4,
+      "name": "PCB",
+      "posts": 1726,
+      "comments": 3940,
+      "score": 46,
+      "sentiment": "看多",
+      "change": 15,
+      "keywords": ["高多层板", "AI服务器", "扩产"],
+      "topPosts": [
+        {"title": "AI 服务器为什么会带动高端 PCB", "content": "演示摘要：介绍高多层、高速材料的量价逻辑，认为结构升级比总量更值得关注。", "author": "制造业小课", "likes": 2765, "comments": 424, "sentiment": "看多", "published": "4小时前", "url": ""},
+        {"title": "PCB 扩产潮：订单和产能谁先到", "content": "演示摘要：讨论扩产节奏和折旧压力，板块景气乐观但公司分化会增大。", "author": "工厂调研簿", "likes": 2092, "comments": 618, "sentiment": "中性", "published": "昨天", "url": ""},
+        {"title": "覆铜板价格变化值得盯紧", "content": "演示摘要：从成本传导角度观察盈利弹性，观点偏多。", "author": "材料价格雷达", "likes": 1740, "comments": 337, "sentiment": "看多", "published": "2天前", "url": ""}
+      ]
+    },
+    {
+      "rank": 5,
+      "name": "AI 算力",
+      "posts": 1508,
+      "comments": 3682,
+      "score": 69,
+      "sentiment": "看多",
+      "change": 28,
+      "keywords": ["服务器", "液冷", "资本开支"],
+      "topPosts": [
+        {"title": "算力资本开支又上修了，A股映射怎么找", "content": "演示摘要：按服务器、互连、供电与液冷梳理受益环节，整体明显偏多。", "author": "算力研究所", "likes": 4530, "comments": 962, "sentiment": "看多", "published": "1小时前", "url": ""},
+        {"title": "AI 算力不是一个板块，是四条链", "content": "演示摘要：强调不要把所有硬件公司视作同一逻辑，重点看订单兑现。", "author": "科技投研札记", "likes": 3158, "comments": 574, "sentiment": "看多", "published": "昨天", "url": ""},
+        {"title": "算力行情最容易忽略的风险", "content": "演示摘要：提醒海外政策、客户集中度和库存波动，观点中性偏谨慎。", "author": "风险备忘录", "likes": 2460, "comments": 830, "sentiment": "看空", "published": "昨天", "url": ""}
+      ]
+    },
+    {
+      "rank": 6,
+      "name": "机器人",
+      "posts": 1129,
+      "comments": 2421,
+      "score": -18,
+      "sentiment": "看空",
+      "change": -9,
+      "keywords": ["量产节奏", "估值", "产业验证"],
+      "topPosts": [
+        {"title": "机器人量产预期是不是走太快了", "content": "演示摘要：认为市场预期领先基本面较多，等待订单和成本曲线进一步验证。", "author": "产业验证派", "likes": 2890, "comments": 912, "sentiment": "看空", "published": "3小时前", "url": ""},
+        {"title": "从零部件看机器人降本空间", "content": "演示摘要：长期方向认可，短期量产节奏偏谨慎。", "author": "机械工程视角", "likes": 2165, "comments": 483, "sentiment": "中性", "published": "昨天", "url": ""},
+        {"title": "机器人板块回撤后能看了吗", "content": "演示摘要：评论区分歧明显，多方看产业趋势，空方担心估值和兑现。", "author": "回撤观察员", "likes": 1926, "comments": 742, "sentiment": "中性", "published": "2天前", "url": ""}
+      ]
+    }
+  ],
+  "stocks": [
+    {
+      "rank": 1, "name": "中际旭创", "code": "300308", "sector": "CPO", "price": 182.36, "changePct": 4.82, "posts": 1268, "comments": 3420, "score": 81, "sentiment": "看多", "heatChange": 36,
+      "topPosts": [
+        {"title": "中际旭创：订单能见度比股价更重要", "content": "演示摘要：作者重点跟踪海外客户需求与产品升级，观点偏多，同时提示高波动。", "author": "光模块跟踪", "likes": 5260, "comments": 1038, "sentiment": "看多", "published": "2小时前", "url": ""},
+        {"title": "拆一下中际旭创的利润弹性", "content": "演示摘要：从出货结构与毛利率做测算，结论积极。", "author": "财报拆解局", "likes": 4012, "comments": 658, "sentiment": "看多", "published": "5小时前", "url": ""},
+        {"title": "高位的中际旭创还值得追吗", "content": "演示摘要：产业趋势与交易拥挤并存，作者建议等待更好赔率。", "author": "赔率优先", "likes": 3388, "comments": 1214, "sentiment": "中性", "published": "昨天", "url": ""}
+      ]
+    },
+    {
+      "rank": 2, "name": "新易盛", "code": "300502", "sector": "CPO", "price": 128.14, "changePct": 3.16, "posts": 1124, "comments": 2986, "score": 76, "sentiment": "看多", "heatChange": 29,
+      "topPosts": [
+        {"title": "新易盛的核心变量：产能、份额、产品结构", "content": "演示摘要：围绕三个经营变量展开，观点整体偏多。", "author": "成长跟踪表", "likes": 4721, "comments": 802, "sentiment": "看多", "published": "3小时前", "url": ""},
+        {"title": "新易盛和中际旭创怎么比较", "content": "演示摘要：比较客户、产品与估值，不给简单结论但认可行业景气。", "author": "横向比较", "likes": 3894, "comments": 1182, "sentiment": "看多", "published": "昨天", "url": ""},
+        {"title": "光模块波动放大，先看风险收益比", "content": "演示摘要：提醒短期涨幅较大，倾向等回撤。", "author": "低吸不追高", "likes": 2543, "comments": 776, "sentiment": "中性", "published": "2天前", "url": ""}
+      ]
+    },
+    {
+      "rank": 3, "name": "沪电股份", "code": "002463", "sector": "PCB", "price": 47.82, "changePct": 2.45, "posts": 986, "comments": 2214, "score": 63, "sentiment": "看多", "heatChange": 24,
+      "topPosts": [
+        {"title": "沪电股份的高端 PCB 逻辑复盘", "content": "演示摘要：重点讨论服务器板升级和客户结构，观点偏多。", "author": "PCB 小组", "likes": 3580, "comments": 561, "sentiment": "看多", "published": "4小时前", "url": ""},
+        {"title": "沪电业绩弹性来自哪里", "content": "演示摘要：拆解收入结构、产能利用率和产品单价。", "author": "制造业财报", "likes": 2876, "comments": 436, "sentiment": "看多", "published": "昨天", "url": ""},
+        {"title": "PCB 景气很好，但估值也不低", "content": "演示摘要：认为中期逻辑仍在，短期需防预期差。", "author": "估值温度计", "likes": 2204, "comments": 702, "sentiment": "中性", "published": "昨天", "url": ""}
+      ]
+    },
+    {
+      "rank": 4, "name": "工业富联", "code": "601138", "sector": "AI 算力", "price": 31.66, "changePct": 1.72, "posts": 912, "comments": 1948, "score": 58, "sentiment": "看多", "heatChange": 19,
+      "topPosts": [
+        {"title": "工业富联：AI 服务器怎么影响利润", "content": "演示摘要：从产品组合变化解释盈利能力，观点偏多。", "author": "硬件利润表", "likes": 3196, "comments": 584, "sentiment": "看多", "published": "5小时前", "url": ""},
+        {"title": "大市值算力股的优势和限制", "content": "演示摘要：认可确定性，但认为弹性可能低于小市值标的。", "author": "稳健成长派", "likes": 2468, "comments": 476, "sentiment": "中性", "published": "昨天", "url": ""},
+        {"title": "工业富联跟踪清单更新", "content": "演示摘要：列出订单、毛利率和资本开支三个观察项。", "author": "每周跟踪", "likes": 2077, "comments": 302, "sentiment": "看多", "published": "2天前", "url": ""}
+      ]
+    },
+    {
+      "rank": 5, "name": "寒武纪", "code": "688256", "sector": "半导体", "price": 684.20, "changePct": -1.08, "posts": 884, "comments": 2672, "score": 12, "sentiment": "中性", "heatChange": 12,
+      "topPosts": [
+        {"title": "寒武纪：空间很大，估值也很难", "content": "演示摘要：多空分歧集中在收入兑现和估值方法。", "author": "估值困难户", "likes": 4286, "comments": 1540, "sentiment": "中性", "published": "2小时前", "url": ""},
+        {"title": "国产 AI 芯片的验证周期", "content": "演示摘要：长期看多国产算力，短期关注客户验证与生态建设。", "author": "芯片生态圈", "likes": 3347, "comments": 831, "sentiment": "看多", "published": "昨天", "url": ""},
+        {"title": "寒武纪高波动背后的三组预期", "content": "演示摘要：认为预期过于集中，短线偏谨慎。", "author": "预期差研究", "likes": 2912, "comments": 1024, "sentiment": "看空", "published": "昨天", "url": ""}
+      ]
+    },
+    {
+      "rank": 6, "name": "胜宏科技", "code": "300476", "sector": "PCB", "price": 52.18, "changePct": 5.21, "posts": 802, "comments": 1820, "score": 72, "sentiment": "看多", "heatChange": 41,
+      "topPosts": [
+        {"title": "胜宏科技为什么突然升温", "content": "演示摘要：热度来自高端板扩产和订单预期，观点明显偏多。", "author": "热度捕手", "likes": 3980, "comments": 784, "sentiment": "看多", "published": "1小时前", "url": ""},
+        {"title": "高端 PCB 扩产的利润测算", "content": "演示摘要：按产能爬坡做测算，提醒良率是关键变量。", "author": "产能模型", "likes": 2856, "comments": 512, "sentiment": "看多", "published": "6小时前", "url": ""},
+        {"title": "胜宏短期涨太快了吗", "content": "演示摘要：基本面积极，但交易节奏偏谨慎。", "author": "不追高实验室", "likes": 2411, "comments": 866, "sentiment": "中性", "published": "昨天", "url": ""}
+      ]
+    },
+    {
+      "rank": 7, "name": "兆易创新", "code": "603986", "sector": "半导体", "price": 118.64, "changePct": -0.42, "posts": 724, "comments": 1656, "score": 35, "sentiment": "看多", "heatChange": 8,
+      "topPosts": [
+        {"title": "兆易创新：存储周期现在走到哪", "content": "演示摘要：跟踪价格、库存和需求，观点温和偏多。", "author": "存储周期表", "likes": 3016, "comments": 622, "sentiment": "看多", "published": "5小时前", "url": ""},
+        {"title": "MCU 复苏的确定性有多少", "content": "演示摘要：认为需求改善但斜率仍需验证。", "author": "芯片库存观察", "likes": 2428, "comments": 514, "sentiment": "中性", "published": "昨天", "url": ""},
+        {"title": "兆易的产品结构比周期更重要", "content": "演示摘要：讨论高端化与新品贡献，观点偏多。", "author": "产品结构研究", "likes": 2160, "comments": 388, "sentiment": "看多", "published": "2天前", "url": ""}
+      ]
+    },
+    {
+      "rank": 8, "name": "中芯国际", "code": "688981", "sector": "半导体", "price": 91.38, "changePct": 0.96, "posts": 686, "comments": 1724, "score": 44, "sentiment": "看多", "heatChange": 11,
+      "topPosts": [
+        {"title": "中芯国际的产能利用率拐点", "content": "演示摘要：认为利用率和折旧是利润弹性的核心观察项。", "author": "晶圆厂笔记", "likes": 2864, "comments": 496, "sentiment": "看多", "published": "4小时前", "url": ""},
+        {"title": "成熟制程的竞争到底有多激烈", "content": "演示摘要：讨论价格竞争与国产需求，结论偏中性。", "author": "半导体老兵", "likes": 2296, "comments": 735, "sentiment": "中性", "published": "昨天", "url": ""},
+        {"title": "中芯的长期逻辑与短期报表", "content": "演示摘要：长期看国产制造，短期关注资本开支效率。", "author": "长短期分开看", "likes": 1988, "comments": 372, "sentiment": "看多", "published": "2天前", "url": ""}
+      ]
+    },
+    {
+      "rank": 9, "name": "光迅科技", "code": "002281", "sector": "光通信", "price": 48.52, "changePct": -2.18, "posts": 648, "comments": 1462, "score": -24, "sentiment": "看空", "heatChange": -6,
+      "topPosts": [
+        {"title": "光迅科技这份预期差要小心", "content": "演示摘要：认为短期订单兑现可能弱于市场预期，观点偏空。", "author": "预期差雷达", "likes": 2758, "comments": 924, "sentiment": "看空", "published": "3小时前", "url": ""},
+        {"title": "光芯片自研的价值怎么判断", "content": "演示摘要：长期价值认可，但量产进度仍需验证。", "author": "光器件档案", "likes": 2201, "comments": 546, "sentiment": "中性", "published": "昨天", "url": ""},
+        {"title": "光迅回撤后，先等两个数据", "content": "演示摘要：建议等待产品出货和毛利率数据，暂不乐观。", "author": "数据确认派", "likes": 1874, "comments": 488, "sentiment": "看空", "published": "2天前", "url": ""}
+      ]
+    },
+    {
+      "rank": 10, "name": "生益科技", "code": "600183", "sector": "PCB", "price": 28.74, "changePct": 1.34, "posts": 586, "comments": 1198, "score": 27, "sentiment": "看多", "heatChange": 5,
+      "topPosts": [
+        {"title": "生益科技：覆铜板涨价能传导吗", "content": "演示摘要：关注价格、成本与产品结构，观点温和偏多。", "author": "材料利润表", "likes": 2380, "comments": 442, "sentiment": "看多", "published": "6小时前", "url": ""},
+        {"title": "高频高速材料的国产进展", "content": "演示摘要：看好技术升级，但认为认证周期较长。", "author": "电子材料观察", "likes": 2012, "comments": 386, "sentiment": "看多", "published": "昨天", "url": ""},
+        {"title": "覆铜板周期还没有全面反转", "content": "演示摘要：需求结构性改善，总量复苏仍需观察。", "author": "周期不抢跑", "likes": 1746, "comments": 512, "sentiment": "中性", "published": "2天前", "url": ""}
+      ]
+    }
+  ]
+}
