@@ -121,6 +121,7 @@ function openDrawer(kind, name, trigger) {
   const item = collection.find((entry) => entry.name === name);
   if (!item) return;
   state.lastFocus = trigger;
+  $("#drawerNote").textContent = "排序口径：点赞数 + 评论数。情绪由文本关键词与互动量加权，仅供参考。";
   $("#drawerKicker").textContent = kind === "sector" ? "SECTOR · STOCK HEAT" : `${item.code} · TOP POSTS`;
   $("#drawerTitle").textContent = item.name;
   const topPosts = Array.isArray(item.topPosts) ? item.topPosts : [];
@@ -140,6 +141,73 @@ function openDrawer(kind, name, trigger) {
   $("#drawer").setAttribute("aria-hidden", "false");
   document.body.style.overflow = "hidden";
   $("#closeDrawer").focus();
+}
+
+async function openHistory(trigger) {
+  state.lastFocus = trigger;
+  trigger.disabled = true;
+  try {
+    const indexResponse = await fetch("/api/history", { cache: "no-store" });
+    if (!indexResponse.ok) throw new Error("无法读取历史归档");
+    const index = await indexResponse.json();
+    const dates = Array.isArray(index.dates) ? index.dates : [];
+    if (!dates.length) {
+      showToast("当前还没有历史预测快照", 3200);
+      return;
+    }
+    const latest = dates[0];
+    const snapshotResponse = await fetch(`/api/history?date=${encodeURIComponent(latest.sourceDate)}`, { cache: "no-store" });
+    if (!snapshotResponse.ok) throw new Error("无法读取历史预测详情");
+    const snapshot = await snapshotResponse.json();
+    const prediction = snapshot.prediction || {};
+    const summary = prediction.summary || {};
+    const sectors = Array.isArray(prediction.sectors) ? prediction.sectors : [];
+    const stocks = Array.isArray(prediction.stocks) ? prediction.stocks : [];
+    const validations = Array.isArray(snapshot.validations) ? snapshot.validations : [];
+    const latestValidation = validations.length ? validations[validations.length - 1] : null;
+
+    $("#drawerKicker").textContent = "FORWARD VALIDATION";
+    $("#drawerTitle").textContent = `${latest.sourceDate} 情绪快照`;
+    $("#drawerSubtitle").textContent = `${number(snapshot.postCount)} 篇帖子 · 截止 ${escapeHtml(snapshot.capturedAt || "--")} · SHA-256 ${escapeHtml(String(snapshot.postsSha256 || "").slice(0, 10))}`;
+    $("#drawerContent").innerHTML = renderHistorySnapshot(summary, sectors, stocks, latestValidation);
+    $("#drawerNote").textContent = "验证口径：看多且上涨、看空且下跌为方向一致；中性与绝对涨跌幅小于 0.3% 的横盘样本不计入命中率。";
+    $("#overlay").hidden = false;
+    $("#drawer").classList.add("open");
+    $("#drawer").setAttribute("aria-hidden", "false");
+    document.body.style.overflow = "hidden";
+    $("#closeDrawer").focus();
+  } catch (error) {
+    showToast(`历史归档读取失败：${error.message}`, 4200);
+  } finally {
+    trigger.disabled = false;
+  }
+}
+
+function renderHistorySnapshot(summary, sectors, stocks, validation) {
+  const score = Number(summary.sentimentScore || 0);
+  const status = validation
+    ? `<span class="history-status verified">已验证 · 命中率 ${validation.accuracyPct ?? "--"}%</span>`
+    : `<span class="history-status pending">等待次日行情验证</span>`;
+  const sectorRows = sectors.map((item) => `
+    <div class="forecast-row">
+      <span><b>${escapeHtml(item.name)}</b><small>${number(item.posts)} 篇提及</small></span>
+      <strong class="${sentimentClass(item.sentiment)}">${escapeHtml(item.sentiment)}</strong>
+      <em>${Number(item.score || 0) > 0 ? "+" : ""}${number(item.score)}</em>
+    </div>`).join("");
+  const stockRows = stocks.filter((item) => Number(item.posts || 0) > 0).map((item) => `
+    <div class="forecast-row">
+      <span><b>${escapeHtml(item.name)}</b><small>${escapeHtml(item.code)} · ${number(item.posts)} 篇</small></span>
+      <strong class="${sentimentClass(item.sentiment)}">${escapeHtml(item.sentiment)}</strong>
+      <em>${Number(item.score || 0) > 0 ? "+" : ""}${number(item.score)}</em>
+    </div>`).join("");
+  return `<section class="history-summary">
+      <div><span>昨日综合情绪</span><b class="${score >= 0 ? "bull" : "bear"}">${score > 0 ? "+" : ""}${score}</b></div>
+      <div><span>去重帖子</span><b>${number(summary.posts)}</b></div>
+      <div><span>看多占比</span><b>${number(summary.bullRatio)}%</b></div>
+    </section>
+    <div class="history-validation-banner">${status}<p>${validation ? `行情截止 ${escapeHtml(validation.marketAsOf || "--")}` : "今天中午接入腾讯或东方财富行情后再计算，预测值不会重算。"}</p></div>
+    <section class="drawer-section forecast-section"><div class="drawer-section-head"><div><span>SECTORS</span><h3>板块预测</h3></div><small>昨日收集口径</small></div><div class="forecast-list">${sectorRows}</div></section>
+    <section class="drawer-section forecast-section"><div class="drawer-section-head"><div><span>STOCKS</span><h3>个股预测</h3></div><small>仅显示有帖子覆盖</small></div><div class="forecast-list">${stockRows || '<div class="sector-stock-empty">暂无明确个股观点</div>'}</div></section>`;
 }
 
 function renderSectorStockRanking(item) {
@@ -271,6 +339,7 @@ function showToast(message, duration = 2600) {
 document.addEventListener("DOMContentLoaded", () => {
   loadDashboard().catch((error) => showToast(error.message, 5000));
   $("#refreshButton").addEventListener("click", refreshData);
+  $("#historyButton").addEventListener("click", (event) => openHistory(event.currentTarget));
   $("#closeDrawer").addEventListener("click", closeDrawer);
   $("#overlay").addEventListener("click", closeDrawer);
   $("#closeImageViewer").addEventListener("click", closeImageViewer);

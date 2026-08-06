@@ -6,7 +6,7 @@ import json
 import mimetypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from config import settings
 from service import DashboardService
@@ -21,7 +21,8 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "SentiBoard/0.1"
 
     def do_GET(self) -> None:
-        path = urlparse(self.path).path
+        parsed = urlparse(self.path)
+        path = parsed.path
         if path == "/api/dashboard":
             self._json(200, SERVICE.current())
             return
@@ -30,6 +31,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/api/config":
             self._json(200, {"refreshTokenRequired": bool(settings.refresh_token)})
+            return
+        if path == "/api/history":
+            source_date = (parse_qs(parsed.query).get("date") or [""])[0]
+            if source_date:
+                snapshot = SERVICE.history_snapshot(source_date)
+                if snapshot is None:
+                    self._json(404, {"error": "未找到该日期的历史快照"})
+                else:
+                    self._json(200, snapshot)
+            else:
+                self._json(200, {"dates": SERVICE.history_index()})
             return
         if path == "/":
             path = "/index.html"

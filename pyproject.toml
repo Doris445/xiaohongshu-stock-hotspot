@@ -27,7 +27,7 @@ dev = [
 ]
 
 [tool.setuptools]
-py-modules = ["config", "llm", "providers", "server", "service"]
+py-modules = ["config", "history", "llm", "providers", "server", "service"]
 
 [tool.ruff]
 line-length = 100

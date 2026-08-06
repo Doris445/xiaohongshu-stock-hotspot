@@ -22,6 +22,10 @@
             <span class="status-dot"></span>
             <span id="updatedLabel">数据加载中</span>
           </div>
+          <button class="history-button" id="historyButton" type="button">
+            <span class="ui-icon" aria-hidden="true">&#xE823;</span>
+            <span>历史验证</span>
+          </button>
           <button class="refresh-button" id="refreshButton" type="button">
             <span class="ui-icon refresh-icon" aria-hidden="true">&#xE72C;</span>
             <span class="button-label">刷新数据</span>
@@ -139,7 +143,7 @@
         <button class="icon-button" id="closeDrawer" type="button" aria-label="关闭详情"><span class="ui-icon" aria-hidden="true">&#xE711;</span></button>
       </div>
       <div class="drawer-content" id="drawerContent"></div>
-      <div class="drawer-note">排序口径：点赞数 + 评论数。情绪由文本关键词与互动量加权，仅供参考。</div>
+      <div class="drawer-note" id="drawerNote">排序口径：点赞数 + 评论数。情绪由文本关键词与互动量加权，仅供参考。</div>
     </aside>
 
     <div class="image-viewer" id="imageViewer" role="dialog" aria-modal="true" aria-label="帖子图片预览" hidden>

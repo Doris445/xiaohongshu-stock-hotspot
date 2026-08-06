@@ -4,9 +4,12 @@ import copy
 import json
 import threading
 import time
+from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from history import HistoryArchive
 from llm import LLMAnalyzer
 from providers import (
     AgentReachXHSProvider,
@@ -15,6 +18,7 @@ from providers import (
     TencentQuoteProvider,
     china_now,
     is_xhs_post_today,
+    parse_xhs_published_date,
 )
 
 
@@ -23,6 +27,7 @@ FIXTURE_PATH = ROOT / "data" / "demo.json"
 CACHE_PATH = ROOT / "data" / "cache.json"
 XHS_SAMPLE_CACHE_PATH = ROOT / "data" / "xhs_samples.json"
 SECTOR_UNIVERSE_CACHE_PATH = ROOT / "data" / "sector_universe.json"
+HISTORY_ROOT = ROOT / "data" / "history"
 
 SECTOR_ALIASES = {
     "半导体": ("半导体", "芯片", "晶圆", "光刻", "存储", "gpu", "ai芯片"),
@@ -41,14 +46,24 @@ class DashboardService:
         self.sector_provider = EastmoneySectorConstituentProvider()
         self.xhs_provider = AgentReachXHSProvider()
         self.llm_analyzer = LLMAnalyzer()
+        self.history_archive = HistoryArchive(HISTORY_ROOT)
         self._data = self._load_initial()
-        self._xhs_samples = self._load_xhs_samples()
+        cached_samples = self._load_xhs_samples()
+        self._xhs_samples = {
+            url: post for url, post in cached_samples.items() if is_xhs_post_today(post)
+        }
         self._sector_universe = self._load_sector_universe()
         self._last_xhs_refresh = (
             XHS_SAMPLE_CACHE_PATH.stat().st_mtime if XHS_SAMPLE_CACHE_PATH.exists() else 0.0
         )
         self._xhs_cooldown_seconds = 15 * 60
         self._data = self._prepare_daily_view(self._data)
+        if cached_samples and XHS_SAMPLE_CACHE_PATH.exists():
+            captured_at = datetime.fromtimestamp(
+                XHS_SAMPLE_CACHE_PATH.stat().st_mtime,
+                tz=china_now().tzinfo,
+            )
+            self._archive_samples(cached_samples, captured_at, "startup-cache")
 
     def _load_initial(self) -> dict[str, Any]:
         path = CACHE_PATH if CACHE_PATH.exists() else FIXTURE_PATH
@@ -65,7 +80,7 @@ class DashboardService:
             return {
                 url: post
                 for url, post in payload.items()
-                if isinstance(post, dict) and is_xhs_post_today(post)
+                if isinstance(post, dict)
             }
         except (OSError, json.JSONDecodeError):
             return {}
@@ -263,7 +278,40 @@ class DashboardService:
             data["summary"] = self._build_summary(data, list(self._xhs_samples.values()))
             self._data = data
             CACHE_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            if self._xhs_samples:
+                self._archive_samples(self._xhs_samples, now, "manual-refresh")
             return copy.deepcopy(data)
+
+    def history_index(self) -> list[dict[str, Any]]:
+        with self._lock:
+            return copy.deepcopy(self.history_archive.list_dates())
+
+    def history_snapshot(self, source_date: str) -> dict[str, Any] | None:
+        with self._lock:
+            snapshot = self.history_archive.latest_public_snapshot(source_date)
+            return copy.deepcopy(snapshot) if snapshot else None
+
+    def _archive_samples(
+        self,
+        samples: dict[str, dict[str, Any]],
+        captured_at: datetime,
+        source: str,
+    ) -> None:
+        grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for post in samples.values():
+            published_date = parse_xhs_published_date(post.get("published"), captured_at)
+            if published_date is not None:
+                grouped[published_date.isoformat()].append(post)
+        for source_date, posts in grouped.items():
+            posts.sort(key=lambda post: str(post.get("url") or ""))
+            dashboard = self._prepare_historical_view(source_date, posts)
+            self.history_archive.archive(
+                source_date=source_date,
+                posts=posts,
+                dashboard=dashboard,
+                captured_at=captured_at,
+                source=source,
+            )
 
     def _prepare_daily_view(
         self, data: dict[str, Any], now: Any | None = None
@@ -271,57 +319,14 @@ class DashboardService:
         current = now or china_now()
         today = current.date().isoformat()
         today_posts = [post for post in self._xhs_samples.values() if is_xhs_post_today(post, current)]
-
-        for sector in data.get("sectors", []):
-            sector.update(
-                {
-                    "posts": 0,
-                    "comments": 0,
-                    "score": 0,
-                    "sentiment": "暂无",
-                    "change": 0,
-                    "keywords": [],
-                    "topPosts": [],
-                    "topStocks": [],
-                    "stockRankingCoverage": {
-                        "postsScanned": 0,
-                        "ocrPosts": 0,
-                        "ocrImages": 0,
-                        "ocrSkippedImages": 0,
-                        "constituents": len(self._sector_universe.get(sector.get("name"), [])),
-                    },
-                    "dataSource": "empty",
-                    "sampledAt": None,
-                }
-            )
         market_is_today = data.get("meta", {}).get("marketDate") == today
-        for stock in data.get("stocks", []):
-            stock.update(
-                {
-                    "posts": 0,
-                    "comments": 0,
-                    "score": 0,
-                    "sentiment": "暂无",
-                    "heatChange": 0,
-                    "topPosts": [],
-                    "dataSource": "empty",
-                    "sampledAt": None,
-                }
-            )
-            if not market_is_today:
-                stock["price"] = None
-                stock["changePct"] = None
+        self._reset_entities(data, preserve_market=market_is_today)
 
         if today_posts:
             data = self._merge_live_posts(data, today_posts)
             self._rank_sector_stocks(data, today_posts)
 
-        data["sectors"].sort(key=lambda item: (item.get("posts", 0), item.get("comments", 0)), reverse=True)
-        data["stocks"].sort(key=lambda item: (item.get("posts", 0), item.get("comments", 0)), reverse=True)
-        for rank, sector in enumerate(data["sectors"], start=1):
-            sector["rank"] = rank
-        for rank, stock in enumerate(data["stocks"], start=1):
-            stock["rank"] = rank
+        self._sort_and_rank_entities(data)
 
         sampled_count = sum(
             item.get("dataSource") == "live" for item in [*data["sectors"], *data["stocks"]]
@@ -362,6 +367,83 @@ class DashboardService:
             )
         data["summary"] = self._build_summary(data, today_posts)
         return data
+
+    def _prepare_historical_view(
+        self, source_date: str, posts: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        data = copy.deepcopy(self._load_initial())
+        self._reset_entities(data, preserve_market=False)
+        if posts:
+            data = self._merge_live_posts(data, posts)
+            self._rank_sector_stocks(data, posts)
+        self._sort_and_rank_entities(data)
+        data["meta"] = {
+            **(data.get("meta") or {}),
+            "mode": "history",
+            "modeLabel": "历史预测快照",
+            "window": "单日",
+            "dataDate": source_date,
+            "samplePoolSize": len(posts),
+            "datePolicy": "按抓取时已确认的北京时间发布日期归档",
+            "marketDate": None,
+            "marketStatus": "pending-validation",
+            "marketSource": "等待后续交易日行情验证",
+        }
+        data["summary"] = self._build_summary(data, posts)
+        return data
+
+    def _reset_entities(self, data: dict[str, Any], preserve_market: bool) -> None:
+        for sector in data.get("sectors", []):
+            sector.update(
+                {
+                    "posts": 0,
+                    "comments": 0,
+                    "score": 0,
+                    "sentiment": "暂无",
+                    "change": 0,
+                    "keywords": [],
+                    "topPosts": [],
+                    "topStocks": [],
+                    "stockRankingCoverage": {
+                        "postsScanned": 0,
+                        "ocrPosts": 0,
+                        "ocrImages": 0,
+                        "ocrSkippedImages": 0,
+                        "constituents": len(self._sector_universe.get(sector.get("name"), [])),
+                    },
+                    "dataSource": "empty",
+                    "sampledAt": None,
+                }
+            )
+        for stock in data.get("stocks", []):
+            stock.update(
+                {
+                    "posts": 0,
+                    "comments": 0,
+                    "score": 0,
+                    "sentiment": "暂无",
+                    "heatChange": 0,
+                    "topPosts": [],
+                    "dataSource": "empty",
+                    "sampledAt": None,
+                }
+            )
+            if not preserve_market:
+                stock["price"] = None
+                stock["changePct"] = None
+
+    @staticmethod
+    def _sort_and_rank_entities(data: dict[str, Any]) -> None:
+        data["sectors"].sort(
+            key=lambda item: (item.get("posts", 0), item.get("comments", 0)), reverse=True
+        )
+        data["stocks"].sort(
+            key=lambda item: (item.get("posts", 0), item.get("comments", 0)), reverse=True
+        )
+        for rank, sector in enumerate(data["sectors"], start=1):
+            sector["rank"] = rank
+        for rank, stock in enumerate(data["stocks"], start=1):
+            stock["rank"] = rank
 
     def _rank_sector_stocks(
         self, data: dict[str, Any], posts: list[dict[str, Any]]

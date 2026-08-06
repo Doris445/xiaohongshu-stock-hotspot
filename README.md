@@ -12,6 +12,7 @@ SentiBoard 是一个本地优先、手动刷新的 A 股社交情绪看板。它
 - 每个板块展示当天明确提及的热门股票，最多 10 只，不用零提及股票凑数。
 - 点击板块或股票，可查看互动量最高的 3 篇帖子及其图片。
 - 手动刷新、15 分钟账号冷却、请求串行、异常即停且不自动重试。
+- 每次成功抓取都会生成本地、不可覆盖的历史预测快照，用于和后续交易日行情做方向验证。
 - 可选 Codex、Claude Code 或 OpenAI 兼容 API（包括 DeepSeek）做语义分析；失败时自动回退本地规则。
 
 ## 数据与模型分工
@@ -140,6 +141,8 @@ python scripts/privacy_check.py
 ```
 
 更多说明见 [PRIVACY.md](PRIVACY.md) 与 [SECURITY.md](SECURITY.md)。
+
+历史验证数据保存在 `data/history/`，同样不会进入 Git。`GET /api/history` 只返回日期、样本数和哈希；`GET /api/history?date=YYYY-MM-DD` 返回预测摘要，不会返回原始帖子、作者或签名 URL。方向验证默认将绝对涨跌幅小于 `0.3%` 视为横盘，不计入命中率。
 
 ## 测试
 

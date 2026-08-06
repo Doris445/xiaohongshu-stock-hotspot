@@ -1,12 +1,15 @@
 import json
 import os
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 os.environ["STOCK_DASHBOARD_DISABLE_NETWORK"] = "1"
 os.environ["SENTIBOARD_LLM_PROVIDER"] = "local-keywords"
 
 from llm import LLMAnalyzer
+from history import HistoryArchive, evaluate_market_alignment
 from providers import AgentReachXHSProvider, XHSImageOCRProvider, is_xhs_post_today, parse_xhs_published_date
 from service import DashboardService
 
@@ -227,6 +230,50 @@ class DashboardServiceTests(unittest.TestCase):
         self.assertEqual(posts[0]["aiStocks"], ["中际旭创"])
         self.assertNotIn("不应发送的作者", analyzer.prompt)
         self.assertNotIn("private-signed-url", analyzer.prompt)
+
+    def test_history_archive_is_append_only_and_hides_raw_posts_from_api_view(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive = HistoryArchive(Path(directory))
+            posts = [{"url": "signed-url", "title": "CPO 看多", "published": "2026-08-05"}]
+            dashboard = {
+                "summary": {"posts": 1, "sentimentScore": 40},
+                "sectors": [
+                    {"rank": 1, "name": "CPO", "posts": 1, "comments": 2, "score": 40, "sentiment": "看多", "keywords": [], "topStocks": []}
+                ],
+                "stocks": [],
+            }
+            captured = datetime(2026, 8, 5, 17, 30, tzinfo=timezone(timedelta(hours=8)))
+            first = archive.archive("2026-08-05", posts, dashboard, captured, "test")
+            second = archive.archive("2026-08-05", posts, dashboard, captured, "test")
+            self.assertEqual(first["snapshotId"], second["snapshotId"])
+            self.assertEqual(archive.list_dates()[0]["snapshotCount"], 1)
+            public = archive.latest_public_snapshot("2026-08-05")
+            self.assertNotIn("posts", public)
+            self.assertEqual(public["postCount"], 1)
+
+    def test_market_alignment_excludes_neutral_and_flat_entities(self):
+        prediction = {
+            "sectors": [
+                {"name": "CPO", "sentiment": "看多", "score": 50, "posts": 10},
+                {"name": "机器人", "sentiment": "看空", "score": -40, "posts": 8},
+                {"name": "PCB", "sentiment": "中性", "score": 0, "posts": 6},
+            ],
+            "stocks": [
+                {"name": "中际旭创", "code": "300308", "sentiment": "看多", "score": 60, "posts": 5}
+            ],
+        }
+        outcomes = {
+            "CPO": {"changePct": 1.2},
+            "机器人": {"changePct": 0.8},
+            "PCB": {"changePct": -1.0},
+            "300308": {"changePct": 0.1},
+        }
+        result = evaluate_market_alignment(prediction, outcomes, flat_threshold=0.3)
+        self.assertEqual(result["overall"]["evaluable"], 2)
+        self.assertEqual(result["overall"]["matches"], 1)
+        self.assertEqual(result["overall"]["accuracyPct"], 50.0)
+        self.assertEqual(result["overall"]["flat"], 1)
+        self.assertEqual(result["overall"]["neutral"], 1)
 
 
 if __name__ == "__main__":
