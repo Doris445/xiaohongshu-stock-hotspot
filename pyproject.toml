@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sentiboard-a-share"
 version = "0.2.0"
-description = "Local-first A-share Xiaohongshu sentiment dashboard"
+description = "Local-first A-share Xiaohongshu and Eastmoney Guba hotspot dashboard"
 readme = "README.md"
 requires-python = ">=3.10,<3.14"
 license = {text = "MIT"}

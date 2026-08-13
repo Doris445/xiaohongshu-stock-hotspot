@@ -92,7 +92,7 @@ def inspect_environment() -> dict[str, Any]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="SentiBoard 部署自检")
+    parser = argparse.ArgumentParser(description="小红书、东财股吧热点看盘部署自检")
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--quick", action="store_true", help="仅检查启动必需项")
     args = parser.parse_args()
@@ -100,7 +100,7 @@ def main() -> None:
     if args.json:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     else:
-        print("SentiBoard 部署自检")
+        print("小红书、东财股吧热点看盘部署自检")
         for name, item in report["checks"].items():
             optional = not item.get("required", True)
             marker = "[OK]" if item["ok"] else ("[WARN]" if optional else "[FAIL]")

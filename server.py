@@ -127,14 +127,14 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="A股社媒情绪看板")
+    parser = argparse.ArgumentParser(description="小红书、东财股吧热点看盘")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8768)
     args = parser.parse_args()
     if args.host not in {"127.0.0.1", "localhost", "::1"} and not settings.refresh_token:
         parser.error("监听非回环地址前必须配置 SENTIBOARD_REFRESH_TOKEN")
     server = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"SentiBoard running at http://{args.host}:{args.port}", flush=True)
+    print(f"小红书、东财股吧热点看盘运行于 http://{args.host}:{args.port}", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

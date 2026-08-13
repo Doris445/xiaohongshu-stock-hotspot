@@ -1,6 +1,6 @@
 # Third-party notices
 
-SentiBoard installs, but does not copy or modify, these upstream projects:
+小红书、东财股吧热点看盘 installs, but does not copy or modify, these upstream projects:
 
 - Agent Reach 1.5.0 — MIT License — https://github.com/Panniantong/agent-reach
 - Scrapling 0.4.12 — BSD 3-Clause License — https://github.com/D4Vinci/Scrapling

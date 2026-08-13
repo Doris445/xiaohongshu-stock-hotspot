@@ -76,7 +76,7 @@ button:focus-visible, a:focus-visible, [tabindex]:focus-visible {
   letter-spacing: -.03em;
 }
 .brand b, .brand small { display: block; }
-.brand b { font-size: 14px; font-weight: 650; letter-spacing: -.02em; }
+.brand b { font-size: 13px; font-weight: 650; letter-spacing: -.02em; white-space: nowrap; }
 .brand small { margin-top: 2px; color: var(--muted); font-size: 10px; }
 .topbar-actions, .updated, .refresh-button, .history-button, .date-button, .unlock-button { display: flex; align-items: center; }
 .topbar-actions { gap: 10px; }
