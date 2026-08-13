@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import copy
+import gc
 import json
 import math
 import os
+import re
 import threading
 import time
 from collections import defaultdict
@@ -13,6 +15,8 @@ from typing import Any
 
 from history import HistoryArchive
 from llm import LLMAnalyzer
+from eastmoney_guba import EastmoneyGubaProvider
+from eastmoney_browser_session import EastmoneyBrowserSession
 from providers import (
     AgentReachXHSProvider,
     EastmoneySectorConstituentProvider,
@@ -34,6 +38,9 @@ XHS_SAMPLE_CACHE_PATH = ROOT / "data" / "xhs_samples.json"
 REQUEST_STATE_PATH = ROOT / "data" / "request_state.json"
 SECTOR_UNIVERSE_CACHE_PATH = ROOT / "data" / "sector_universe.json"
 HISTORY_ROOT = ROOT / "data" / "history"
+EASTMONEY_CACHE_PATH = ROOT / "data" / "eastmoney_cache.json"
+EASTMONEY_DETAIL_CACHE_PATH = ROOT / "data" / "eastmoney_stock_details.json"
+EASTMONEY_REQUEST_STATE_PATH = ROOT / "data" / "eastmoney_request_state.json"
 
 SECTOR_ALIASES = {
     "半导体": ("半导体", "芯片", "晶圆", "光刻", "存储", "gpu", "ai芯片"),
@@ -52,6 +59,8 @@ class DashboardService:
         self.sector_provider = EastmoneySectorConstituentProvider()
         self.sector_quote_provider = EastmoneySectorQuoteProvider()
         self.xhs_provider = AgentReachXHSProvider()
+        self.eastmoney_browser = EastmoneyBrowserSession()
+        self.eastmoney_provider = EastmoneyGubaProvider()
         self.llm_analyzer = LLMAnalyzer()
         self.history_archive = HistoryArchive(HISTORY_ROOT)
         self._data = self._load_initial()
@@ -71,6 +80,12 @@ class DashboardService:
         self._sector_universe = self._load_sector_universe()
         self._last_xhs_refresh = self._load_request_state()
         self._xhs_cooldown_seconds = 15 * 60
+        self._eastmoney_data = self._load_json_or(
+            EASTMONEY_CACHE_PATH, self.eastmoney_provider.empty_hierarchy("尚未刷新东方财富社区")
+        )
+        self._eastmoney_details = self._load_json_or(EASTMONEY_DETAIL_CACHE_PATH, {})
+        self._last_eastmoney_refresh = self._load_timestamp(EASTMONEY_REQUEST_STATE_PATH)
+        self._eastmoney_cooldown_seconds = 30 * 60
         self._data = self._prepare_daily_view(self._data)
         if cached_samples and XHS_SAMPLE_CACHE_PATH.exists():
             captured_at = datetime.fromtimestamp(
@@ -82,6 +97,21 @@ class DashboardService:
     def _load_initial(self) -> dict[str, Any]:
         path = CACHE_PATH if CACHE_PATH.exists() else FIXTURE_PATH
         return json.loads(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _load_json_or(path: Path, fallback: Any) -> Any:
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return copy.deepcopy(fallback)
+
+    @staticmethod
+    def _load_timestamp(path: Path) -> float:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return max(0.0, float(payload.get("lastPlatformRequestAt") or 0))
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return 0.0
 
     @staticmethod
     def _load_request_state() -> float:
@@ -153,6 +183,213 @@ class DashboardService:
             }
             self._data = self._prepare_daily_view(self._data)
             return copy.deepcopy(self._data)
+
+    def current_eastmoney(self) -> dict[str, Any]:
+        with self._lock:
+            data = copy.deepcopy(self._eastmoney_data)
+            meta = data.setdefault("meta", {})
+            meta["methodology"] = (
+                "板块和成分股按当日成交额排序；股吧从刷新时点逐页扫描至当天 06:00，"
+                "详情按点击补全"
+            )
+            data.setdefault("quality", {})["rules"] = [
+                "板块/个股热度按当日成交额，不把涨跌幅当热度",
+                "逐页扫描至早于 06:00；点入股票后用正文二次筛选",
+                "排除辱骂、喊单、短口号与引流内容",
+                "普通评论不纳入分析，仅补充帖主的分析性回复",
+            ]
+            today = china_now().date().isoformat()
+            if meta.get("dataDate") != today:
+                meta.update({
+                    "status": "stale",
+                    "message": "缓存不是今天的数据，请点击刷新重新扫描",
+                    "staleDataDate": meta.get("dataDate"),
+                })
+            remaining = max(
+                0, round(self._eastmoney_cooldown_seconds - (time.time() - self._last_eastmoney_refresh))
+            ) if self._last_eastmoney_refresh else 0
+            meta["cooldownRemaining"] = remaining
+            meta["nextSafeRefreshAt"] = (
+                datetime.fromtimestamp(
+                    self._last_eastmoney_refresh + self._eastmoney_cooldown_seconds,
+                    tz=china_now().tzinfo,
+                ).isoformat(timespec="seconds")
+                if self._last_eastmoney_refresh else None
+            )
+            for sector in data.get("sectors") or []:
+                for stock in sector.get("stocks") or []:
+                    stock.pop("_candidateRows", None)
+                    stock.pop("_windowRows", None)
+            return data
+
+    def _clear_previous_eastmoney_cache(self, today: str) -> bool:
+        """Discard yesterday's Guba content cache on the first refresh of a new day.
+
+        The separately managed browser profile is intentionally not touched: it
+        contains the user's reusable verification session, not collected posts.
+        """
+        meta = self._eastmoney_data.get("meta") if isinstance(self._eastmoney_data, dict) else {}
+        cached_date = str((meta or {}).get("dataDate") or "").strip()
+        hierarchy_is_old = bool(cached_date and cached_date != today)
+
+        current_details = {
+            key: value
+            for key, value in self._eastmoney_details.items()
+            if re.match(r"^v\d+:", str(key)) and f":{today}:" in str(key)
+        }
+        details_were_pruned = len(current_details) != len(self._eastmoney_details)
+        if not hierarchy_is_old and not details_were_pruned:
+            return False
+
+        if hierarchy_is_old:
+            empty = self.eastmoney_provider.empty_hierarchy(
+                "已清空前一日股吧缓存，正在采集今日数据"
+            )
+            empty_meta = empty.setdefault("meta", {})
+            empty_meta.update({
+                "dataDate": today,
+                "previousDayCacheCleared": True,
+                "previousDataDate": cached_date,
+            })
+            self._eastmoney_data = empty
+            EASTMONEY_CACHE_PATH.write_text(
+                json.dumps(empty, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
+        self._eastmoney_details = current_details
+        EASTMONEY_DETAIL_CACHE_PATH.write_text(
+            json.dumps(current_details, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        # Drop the now-unreferenced multi-megabyte post windows promptly.
+        gc.collect()
+        return True
+
+    def refresh_eastmoney(self) -> dict[str, Any]:
+        with self._lock:
+            today = china_now().date().isoformat()
+            previous_day_cache_cleared = self._clear_previous_eastmoney_cache(today)
+            remaining = max(
+                0, round(self._eastmoney_cooldown_seconds - (time.time() - self._last_eastmoney_refresh))
+            ) if self._last_eastmoney_refresh else 0
+            if remaining:
+                data = copy.deepcopy(self._eastmoney_data)
+                data.setdefault("meta", {}).update({
+                    "cooldownRemaining": remaining,
+                    "message": (
+                        ("前一日缓存已清空；" if previous_day_cache_cleared else "")
+                        + f"100 只股票扫描冷却中，约 {max(1, remaining // 60)} 分钟后可再次刷新"
+                    ),
+                })
+                return data
+            attempted_at = time.time()
+            # This refresh is deliberately serial and cached: 11 quote pages +
+            # at most 100 stock-bar list pages, never 1000 post-detail pages.
+            fresh = self.eastmoney_provider.collect_hierarchy(sector_limit=10, stocks_per_sector=10)
+            self._last_eastmoney_refresh = attempted_at
+            EASTMONEY_REQUEST_STATE_PATH.write_text(
+                json.dumps({"lastPlatformRequestAt": attempted_at}, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            if fresh.get("meta", {}).get("status") == "ok":
+                if previous_day_cache_cleared:
+                    fresh_meta = fresh.setdefault("meta", {})
+                    fresh_meta["previousDayCacheCleared"] = True
+                    fresh_meta["message"] = (
+                        "前一日缓存已清空；" + str(fresh_meta.get("message") or "今日数据采集完成")
+                    )
+                self._eastmoney_data = fresh
+                EASTMONEY_CACHE_PATH.write_text(
+                    json.dumps(fresh, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            else:
+                current = copy.deepcopy(self._eastmoney_data)
+                failure_message = fresh.get("meta", {}).get("message") or "本次刷新失败"
+                current.setdefault("meta", {}).update({
+                    "status": "warn",
+                    "message": (
+                        f"前一日缓存已清空；{failure_message}，今日暂无可用数据"
+                        if previous_day_cache_cleared
+                        else f"{failure_message}，保留当日上次缓存"
+                    ),
+                })
+                if previous_day_cache_cleared:
+                    current["meta"]["previousDayCacheCleared"] = True
+                self._eastmoney_data = current
+                EASTMONEY_CACHE_PATH.write_text(
+                    json.dumps(current, ensure_ascii=False, indent=2), encoding="utf-8"
+                )
+            result = copy.deepcopy(self._eastmoney_data)
+            result.setdefault("meta", {})["cooldownRemaining"] = self._eastmoney_cooldown_seconds
+            result["meta"]["nextSafeRefreshAt"] = datetime.fromtimestamp(
+                attempted_at + self._eastmoney_cooldown_seconds,
+                tz=china_now().tzinfo,
+            ).isoformat(timespec="seconds")
+            for sector in result.get("sectors") or []:
+                for stock in sector.get("stocks") or []:
+                    stock.pop("_candidateRows", None)
+                    stock.pop("_windowRows", None)
+            return result
+
+    def eastmoney_stock_detail(self, code: str) -> dict[str, Any]:
+        if not re.fullmatch(r"\d{6}", str(code or "")):
+            raise ValueError("股票代码必须为 6 位数字")
+        with self._lock:
+            today = china_now().date().isoformat()
+            session = self.eastmoney_browser.status()
+            session_ready = session.get("status") == "ready"
+            self.eastmoney_provider.browser_fetcher = (
+                self.eastmoney_browser.fetch_html if session_ready else None
+            )
+            # Bump the prefix whenever detail parsing/filter semantics change so
+            # an older empty result cannot mask newly supported article pages.
+            cache_key = f"v4:{today}:{'verified' if session_ready else 'public'}:{code}"
+            cached = self._eastmoney_details.get(cache_key)
+            if isinstance(cached, dict):
+                return copy.deepcopy(cached)
+            stock = next(
+                (
+                    stock
+                    for sector in self._eastmoney_data.get("sectors") or []
+                    for stock in sector.get("stocks") or []
+                    if str(stock.get("code") or "") == code
+                ),
+                None,
+            )
+            if not stock:
+                raise ValueError("该股票不在当前 100 只活跃股池中，请先刷新东方财富看板")
+            detail = self.eastmoney_provider.collect_stock_detail(stock, max_posts=10)
+            self._eastmoney_details = {
+                key: value
+                for key, value in self._eastmoney_details.items()
+                if key.startswith(f"v4:{today}:")
+            }
+            self._eastmoney_details[cache_key] = detail
+            EASTMONEY_DETAIL_CACHE_PATH.write_text(
+                json.dumps(self._eastmoney_details, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            return copy.deepcopy(detail)
+
+    def eastmoney_session_status(self) -> dict[str, Any]:
+        return self.eastmoney_browser.status()
+
+    def open_eastmoney_session(self) -> dict[str, Any]:
+        with self._lock:
+            rows = [
+                row
+                for sector in self._eastmoney_data.get("sectors") or []
+                for stock in sector.get("stocks") or []
+                for row in stock.get("_windowRows") or []
+                if isinstance(row, dict)
+                and str(row.get("url") or "").startswith("https://guba.eastmoney.com/news,")
+            ]
+            rows.sort(
+                key=lambda row: int(row.get("readCount") or 0)
+                + int(row.get("commentCount") or 0) * 12,
+                reverse=True,
+            )
+            if not rows:
+                raise ValueError("当前缓存没有普通股吧帖子，请先刷新东方财富看板")
+            return self.eastmoney_browser.open_for_verification(str(rows[0]["url"]))
 
     def refresh(self) -> dict[str, Any]:
         with self._lock:

@@ -18,6 +18,10 @@
           </span>
         </a>
         <div class="topbar-actions">
+          <nav class="source-switch" aria-label="数据源切换">
+            <button class="source-tab active" data-source="xhs" type="button">小红书</button>
+            <button class="source-tab" data-source="eastmoney" type="button">东方财富社区</button>
+          </nav>
           <div class="updated" aria-live="polite">
             <span class="status-dot"></span>
             <span id="updatedLabel">数据加载中</span>
@@ -45,6 +49,10 @@
             <span class="ui-icon" aria-hidden="true">&#xE823;</span>
             <span>历史验证</span>
           </button>
+          <button class="unlock-button" id="eastmoneyUnlockButton" type="button" aria-label="解锁东方财富普通股吧正文" hidden>
+            <span class="ui-icon" aria-hidden="true">&#xE72E;</span>
+            <span class="button-label">解锁正文</span>
+          </button>
           <button class="refresh-button" id="refreshButton" type="button" aria-label="刷新今天的数据">
             <span class="ui-icon refresh-icon" aria-hidden="true">&#xE72C;</span>
             <span class="button-label">刷新数据</span>
@@ -56,8 +64,8 @@
         <section class="hero">
           <div class="hero-copy">
             <div class="eyebrow"><span>MARKET PULSE</span><span class="eyebrow-separator" aria-hidden="true"></span><span id="windowLabel">今日</span></div>
-            <h1>市场在讨论什么，<br /><em>情绪正在往哪走。</em></h1>
-            <p>聚合公开社媒讨论与行情快照，快速识别 A 股热门板块、个股和情绪分歧。</p>
+            <h1 id="heroTitle">市场在讨论什么，<br /><em>情绪正在往哪走。</em></h1>
+            <p id="heroDescription">聚合公开社媒讨论与行情快照，快速识别 A 股热门板块、个股和情绪分歧。</p>
             <div class="source-row">
               <span class="source-badge" id="modeBadge">演示数据</span>
               <span id="sourceText">小红书后端等待配置</span>
@@ -102,17 +110,17 @@
 
         <section class="quality-strip" id="qualityStrip" aria-label="数据质量">
           <div class="quality-intro"><span class="quality-dot" id="qualityDot"></span><span><b id="qualityLabel">正在检查证据</b><small id="qualityMessage">加载采集质量与可判定范围</small></span></div>
-          <div class="quality-item"><span>日期有效</span><b id="qualityDate">--</b></div>
-          <div class="quality-item"><span>详情证据</span><b id="qualityEvidence">--</b></div>
-          <div class="quality-item"><span>可用信号</span><b id="qualityEntities">--</b></div>
-          <div class="quality-item"><span>评论覆盖</span><b id="qualityComments">--</b></div>
+          <div class="quality-item"><span id="qualityDateLabel">日期有效</span><b id="qualityDate">--</b></div>
+          <div class="quality-item"><span id="qualityEvidenceLabel">详情证据</span><b id="qualityEvidence">--</b></div>
+          <div class="quality-item"><span id="qualityEntitiesLabel">可用信号</span><b id="qualityEntities">--</b></div>
+          <div class="quality-item"><span id="qualityCommentsLabel">评论覆盖</span><b id="qualityComments">--</b></div>
         </section>
 
         <section class="content-section">
           <div class="section-heading">
             <div>
-              <span class="section-kicker">SECTOR HEAT</span>
-              <h2>热门板块</h2>
+              <span class="section-kicker" id="sectorKicker">SECTOR HEAT</span>
+              <h2 id="sectorSectionTitle">热门板块</h2>
               <p id="sectorSectionDescription">点击板块，查看今日热门股票 Top 10 与高互动帖子</p>
             </div>
             <div class="legend"><span><i class="red"></i>看多</span><span><i class="gray"></i>中性</span><span><i class="green"></i>看空</span></div>
@@ -127,7 +135,7 @@
               <h2 id="stockSectionTitle">讨论度最高的 10 只股票</h2>
               <p id="stockSectionDescription">点击任意一行，查看互动量最高的三篇帖子</p>
             </div>
-            <div class="table-filter" role="group" aria-label="情绪筛选">
+            <div class="table-filter" id="sentimentFilter" role="group" aria-label="情绪筛选">
               <button class="filter active" data-filter="全部" type="button">全部</button>
               <button class="filter" data-filter="看多" type="button">看多</button>
               <button class="filter" data-filter="中性" type="button">中性</button>
@@ -138,12 +146,12 @@
             <table class="stock-table">
               <thead>
                 <tr>
-                  <th>排名 / 股票</th>
-                  <th>所属板块</th>
-                  <th>最新价</th>
-                  <th>讨论热度</th>
-                  <th>帖子 / 评论</th>
-                  <th>情绪</th>
+                  <th id="stockHeadName">排名 / 股票</th>
+                  <th id="stockHeadSector">所属板块</th>
+                  <th id="stockHeadPrice">最新价</th>
+                  <th id="stockHeadHeat">讨论热度</th>
+                  <th id="stockHeadPosts">帖子 / 评论</th>
+                  <th id="stockHeadSentiment">情绪</th>
                   <th><span class="sr-only">查看详情</span></th>
                 </tr>
               </thead>
@@ -154,7 +162,7 @@
 
         <footer>
           <p>数据仅作信息整理，不构成任何投资建议。请独立判断并注意风险。</p>
-          <p><span id="marketSource">行情来源：--</span> · <span>社媒来源：小红书公开内容</span></p>
+          <p><span id="marketSource">行情来源：--</span> · <span id="socialSource">社媒来源：小红书公开内容</span></p>
         </footer>
       </main>
     </div>
@@ -186,13 +194,13 @@
         <button class="icon-button modal-close" id="closeMethod" type="button" aria-label="关闭说明"><span class="ui-icon" aria-hidden="true">&#xE711;</span></button>
         <span class="section-kicker">METHODOLOGY</span>
         <h2 id="methodTitle">这个看板怎么算“情绪”</h2>
-        <div class="method-steps">
+        <div class="method-steps" id="methodSteps">
           <div><b>01</b><p><strong>采样</strong><span>按板块与股票关键词搜索公开笔记，仅纳入发布日期可验证为所选北京时间日期的内容。</span></p></div>
           <div><b>02</b><p><strong>证据</strong><span>A 级为正文或 tags，B 级为图片文字，C 级仅标题。C 级只计热度，不判断看多看空。</span></p></div>
           <div><b>03</b><p><strong>分层</strong><span>1 篇证据显示“线索”，2 篇独立作者显示“初步”；至少 3 篇且来自 2 位作者才升级为正式方向。单篇爆款权重设有上限。</span></p></div>
           <div><b>04</b><p><strong>股票热度</strong><span>从板块成分股中动态识别股票；按当日提及帖数排序，同一篇帖子重复出现只计一次。</span></p></div>
         </div>
-        <div class="method-caveat">帖子日期无法确认或不属于所选日期时，系统会留空而不沿用其他日期数据。历史行情不会伪装成当日实时行情。</div>
+        <div class="method-caveat" id="methodCaveat">帖子日期无法确认或不属于所选日期时，系统会留空而不沿用其他日期数据。历史行情不会伪装成当日实时行情。</div>
       </section>
     </div>
 

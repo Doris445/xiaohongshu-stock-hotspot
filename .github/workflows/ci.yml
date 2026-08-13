@@ -6,7 +6,11 @@ on:
 
 jobs:
   test:
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     env:
       STOCK_DASHBOARD_DISABLE_NETWORK: "1"
       SENTIBOARD_LLM_PROVIDER: local-keywords
@@ -19,6 +23,19 @@ jobs:
         with:
           node-version: "22"
       - run: python -m pip install -e .
+      - name: Validate PowerShell deployment scripts
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          [void][scriptblock]::Create((Get-Content -Raw -Encoding UTF8 scripts/setup.ps1))
+          [void][scriptblock]::Create((Get-Content -Raw -Encoding UTF8 scripts/start.ps1))
+      - name: Validate Bash deployment scripts
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          bash -n scripts/setup.sh
+          bash -n scripts/start.sh
+      - run: python scripts/doctor.py --json
       - run: python -m unittest -v test_dashboard.py
       - run: node --check static/app.js
       - run: python scripts/privacy_check.py

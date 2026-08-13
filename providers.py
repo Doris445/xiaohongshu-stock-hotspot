@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -163,28 +164,17 @@ class EastmoneySectorConstituentProvider:
     def fetch(self) -> dict[str, list[dict[str, str]]]:
         if os.environ.get("STOCK_DASHBOARD_DISABLE_NETWORK") == "1":
             return {}
-        if SCRAPLING_ROOT.exists():
-            import sys
-
-            scrapling_path = str(SCRAPLING_ROOT)
-            if scrapling_path not in sys.path:
-                sys.path.insert(0, scrapling_path)
-        try:
-            from scrapling.fetchers import Fetcher
-        except Exception:
-            return {}
 
         sectors: dict[str, list[dict[str, str]]] = {}
         for sector, boards in SECTOR_BOARD_CODES.items():
             merged: dict[str, dict[str, str]] = {}
             for board in boards:
                 try:
-                    response = Fetcher.get(
-                        self.endpoint.format(board=board),
-                        impersonate="chrome",
-                        timeout=10,
+                    payload = json.loads(
+                        fetch_public_bytes(
+                            self.endpoint.format(board=board), timeout=10
+                        ).decode("utf-8", errors="replace")
                     )
-                    payload = json.loads(response.body.decode("utf-8", errors="replace"))
                     rows = payload.get("data", {}).get("diff") or []
                 except Exception:
                     continue
@@ -579,12 +569,24 @@ class AgentReachXHSProvider:
         self._last_platform_request = 0.0
         self.ocr_provider = XHSImageOCRProvider()
 
+    @staticmethod
+    def _agent_reach_executable() -> str | None:
+        """Find Agent Reach globally or beside the active virtualenv Python."""
+        candidates = [
+            shutil.which("agent-reach"),
+            shutil.which("agent-reach.exe"),
+            str(Path(sys.executable).parent / "agent-reach.exe"),
+            str(Path(sys.executable).parent / "agent-reach"),
+        ]
+        return next((value for value in candidates if value and Path(value).is_file()), None)
+
     def status(self) -> dict[str, str | None]:
-        if not shutil.which("agent-reach"):
+        executable = self._agent_reach_executable()
+        if not executable:
             return {"status": "off", "backend": None, "message": "未检测到 agent-reach"}
         try:
             result = subprocess.run(
-                ["agent-reach", "doctor", "--json"],
+                [executable, "doctor", "--json"],
                 capture_output=True,
                 text=True,
                 encoding="utf-8",

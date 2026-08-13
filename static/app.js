@@ -1,5 +1,9 @@
 const state = {
   data: null,
+  source: "xhs",
+  eastmoneyData: null,
+  eastmoneySession: null,
+  activeEastmoneySector: null,
   filter: "全部",
   lastFocus: null,
   refreshTokenRequired: false,
@@ -75,10 +79,60 @@ async function loadDashboard(selectedDate = null) {
   renderDatePicker();
 }
 
+async function loadEastmoney() {
+  const [response, sessionResponse] = await Promise.all([
+    fetch("/api/eastmoney", { cache: "no-store" }),
+    fetch("/api/eastmoney/session", { cache: "no-store" }),
+  ]);
+  if (!response.ok) throw new Error("无法读取东方财富社区看板");
+  state.eastmoneyData = await response.json();
+  if (sessionResponse.ok) state.eastmoneySession = await sessionResponse.json();
+  if (!state.activeEastmoneySector) {
+    state.activeEastmoneySector = state.eastmoneyData.sectors?.[0]?.code || null;
+  }
+  render();
+}
+
+async function switchSource(source) {
+  if (!['xhs', 'eastmoney'].includes(source) || state.source === source) return;
+  state.source = source;
+  state.filter = "全部";
+  document.querySelectorAll(".source-tab").forEach((button) => {
+    button.classList.toggle("active", button.dataset.source === source);
+  });
+  closeDatePicker();
+  if (source === "eastmoney" && !state.eastmoneyData) {
+    showToast("正在读取东方财富社区缓存…");
+    await loadEastmoney();
+  } else {
+    render();
+  }
+}
+
 function render() {
+  document.body.dataset.source = state.source;
+  if (state.source === "eastmoney") {
+    renderEastmoney();
+    return;
+  }
   const { meta, summary, sectors, stocks } = state.data;
   const label = viewLabel();
   const isHistory = meta.mode === "history";
+  $("#heroTitle").innerHTML = "市场在讨论什么，<br /><em>情绪正在往哪走。</em>";
+  $("#heroDescription").textContent = "聚合公开社媒讨论与行情快照，快速识别 A 股热门板块、个股和情绪分歧。";
+  $("#sectorKicker").textContent = "SECTOR HEAT";
+  $("#sectorSectionTitle").textContent = "热门板块";
+  $("#sentimentFilter").hidden = false;
+  $("#dateButton").hidden = false;
+  $("#historyButton").hidden = false;
+  $("#eastmoneyUnlockButton").hidden = true;
+  $("#socialSource").textContent = "社媒来源：小红书公开内容";
+  $("#qualityDateLabel").textContent = "日期有效";
+  $("#qualityEvidenceLabel").textContent = "详情证据";
+  $("#qualityEntitiesLabel").textContent = "可用信号";
+  $("#qualityCommentsLabel").textContent = "评论覆盖";
+  setStockHeaders("排名 / 股票", "所属板块", "最新价", "讨论热度", "帖子 / 评论", "情绪");
+  renderMethodology("xhs");
   $("#updatedLabel").textContent = isHistory ? `快照 ${meta.updatedLabel || meta.dataDate}` : `截止 ${meta.updatedLabel}`;
   $("#windowLabel").textContent = label;
   $("#modeBadge").textContent = meta.modeLabel;
@@ -128,6 +182,278 @@ function render() {
   $("#sectorGrid").innerHTML = sectors.map(renderSector).join("");
   renderStocks(stocks);
   bindEntityButtons();
+}
+
+function setStockHeaders(name, sector, price, heat, posts, sentiment) {
+  $("#stockHeadName").textContent = name;
+  $("#stockHeadSector").textContent = sector;
+  $("#stockHeadPrice").textContent = price;
+  $("#stockHeadHeat").textContent = heat;
+  $("#stockHeadPosts").textContent = posts;
+  $("#stockHeadSentiment").textContent = sentiment;
+}
+
+function renderMethodology(source) {
+  if (source === "eastmoney") {
+    $("#methodTitle").textContent = "东方财富社区如何筛选技术分析";
+    $("#methodSteps").innerHTML = `
+      <div><b>01</b><p><strong>确定股票池</strong><span>按当日成交额选 10 个热门板块，每板块取 10 只活跃股。</span></p></div>
+      <div><b>02</b><p><strong>完整时间窗</strong><span>每只股票按最新发帖分页，覆盖北京时间 06:00 至点击刷新时点；整页越过 06:00 才停止。</span></p></div>
+      <div><b>03</b><p><strong>文章门控</strong><span>正文约 60 字以上、至少 3 个有效句/段、明确点名股票并含至少两类分析证据；一两句情绪帖直接剔除。</span></p></div>
+      <div><b>04</b><p><strong>人工核验会话</strong><span>普通股吧需要身份核实时，由你在项目专属隔离窗口手动完成滑块；程序只复用该会话读取预筛后的正文和图片。</span></p></div>`;
+    $("#methodCaveat").textContent = "不会自动破解滑块，也不会读取日常 Chrome 的 Cookie。普通读者评论只统计数量；仅对已入选文章保留帖主的有效补充分析。社区综合倾向不构成投资建议。";
+    return;
+  }
+  $("#methodTitle").textContent = "这个看板怎么算“情绪”";
+  $("#methodSteps").innerHTML = `
+    <div><b>01</b><p><strong>采样</strong><span>按板块与股票关键词搜索公开笔记，仅纳入发布日期可验证为所选北京时间日期的内容。</span></p></div>
+    <div><b>02</b><p><strong>证据</strong><span>A 级为正文或 tags，B 级为图片文字，C 级仅标题。C 级只计热度，不判断看多看空。</span></p></div>
+    <div><b>03</b><p><strong>分层</strong><span>1 篇证据显示“线索”，2 篇独立作者显示“初步”；至少 3 篇且来自 2 位作者才升级为正式方向。</span></p></div>
+    <div><b>04</b><p><strong>股票热度</strong><span>从板块成分股中动态识别股票；按当日提及帖数排序，同一篇帖子重复出现只计一次。</span></p></div>`;
+  $("#methodCaveat").textContent = "帖子日期无法确认或不属于所选日期时，系统会留空而不沿用其他日期数据。历史行情不会伪装成当日实时行情。";
+}
+
+function formatAmount(value) {
+  const amount = Number(value || 0);
+  if (amount >= 1e8) return `${(amount / 1e8).toFixed(amount >= 1e10 ? 0 : 1)}亿`;
+  if (amount >= 1e4) return `${(amount / 1e4).toFixed(0)}万`;
+  return number(amount);
+}
+
+function renderEastmoney() {
+  const data = state.eastmoneyData;
+  if (!data) return;
+  const { meta = {}, summary = {}, sectors = [] } = data;
+  const completePct = summary.stocks ? Math.round(Number(summary.completeStocks || 0) / Number(summary.stocks) * 100) : 0;
+  $("#heroTitle").innerHTML = "从板块到个股，<br /><em>只留下有依据的分析。</em>";
+  $("#heroDescription").textContent = "覆盖 10 个热门板块与 100 只活跃股，逐页扫描 06:00 至刷新时点的全部发帖；详情只补全你点开的股票。";
+  $("#updatedLabel").textContent = `截止 ${meta.updatedLabel || "尚未刷新"}`;
+  $("#windowLabel").textContent = "06:00 至刷新";
+  $("#modeBadge").textContent = meta.status === "ok" ? "社区扫描" : "等待刷新";
+  $("#modeBadge").classList.toggle("live", meta.status === "ok");
+  $("#sourceText").textContent = meta.message || "东方财富社区等待刷新";
+  $("#sampleScope").textContent = `${meta.scope || "10 个板块 × 10 只股票"} · ${number(summary.pagesScanned)} 页 · ${number(summary.scannedPosts)} 帖`;
+  $("#pulseScore").textContent = summary.stocks ? completePct : "--";
+  $("#pulseBar").style.left = `${Math.max(0, Math.min(100, completePct))}%`;
+  $("#pulseTrend").textContent = summary.stocks ? `${number(summary.completeStocks)}/${number(summary.stocks)} 完整` : "等待扫描";
+  $("#pulseTrend").className = `pulse-trend ${completePct === 100 ? "bull" : "neutral"}`;
+  $("#postsMetricLabel").textContent = "06:00 后帖子";
+  $("#postsMetric").textContent = number(summary.scannedPosts);
+  $("#commentsMetricLabel").textContent = "评论数量";
+  $("#commentsMetric").textContent = number(summary.todayComments);
+  $("#commentsMetricNote").textContent = "普通评论只计数；入选文章补充帖主回复";
+  $("#bullMetricLabel").textContent = "疑似分析帖";
+  $("#bullMetric").textContent = number(summary.candidatePosts);
+  $("#bullMetricNote").textContent = "点入股票后用正文二次筛选";
+  $("#qualityStrip").dataset.status = completePct === 100 ? "ready" : summary.stocks ? "insufficient" : "empty";
+  $("#qualityLabel").textContent = completePct === 100 ? "时间窗完整" : summary.stocks ? "部分股票未越过 06:00" : "尚未扫描";
+  $("#qualityMessage").textContent = "普通列表按最新发帖分页；详情页再校验原始发布时间";
+  $("#qualityDateLabel").textContent = "时间起点";
+  $("#qualityDate").textContent = "06:00";
+  $("#qualityEvidenceLabel").textContent = "分析候选";
+  $("#qualityEvidence").textContent = `${number(summary.candidatePosts)} / ${number(summary.scannedPosts)}`;
+  $("#qualityEntitiesLabel").textContent = "完整股票";
+  $("#qualityEntities").textContent = `${number(summary.completeStocks)} / ${number(summary.stocks)}`;
+  $("#qualityCommentsLabel").textContent = "已扫描页";
+  $("#qualityComments").textContent = number(summary.pagesScanned);
+  $("#sectorKicker").textContent = "MARKET-ACTIVE SECTORS";
+  $("#sectorSectionTitle").textContent = "今日热门板块 Top 10";
+  $("#sectorSectionDescription").textContent = "按当日成交额排序；点击板块查看其中 10 只活跃股";
+  $("#sectorGrid").innerHTML = sectors.map(renderEastmoneySector).join("") || `<div class="eastmoney-empty">点击右上角“刷新数据”开始建立 06:00 后的社区样本。</div>`;
+  $("#sentimentFilter").hidden = true;
+  $("#dateButton").hidden = true;
+  $("#historyButton").hidden = true;
+  $("#marketSource").textContent = "热度来源：东方财富延迟行情成交额";
+  $("#socialSource").textContent = "社区来源：东方财富股吧公开页面";
+  setStockHeaders("排名 / 股票", "所属板块", "最新价", "成交额 / 换手", "帖子 / 分析候选", "时间窗");
+  renderMethodology("eastmoney");
+  bindEastmoneySectorButtons();
+  renderEastmoneyStocks();
+  const nextSafe = meta.nextSafeRefreshAt ? new Date(meta.nextSafeRefreshAt) : null;
+  $("#refreshButton").disabled = false;
+  $("#refreshButton").title = nextSafe && nextSafe > new Date() ? `大批量扫描冷却至 ${nextSafe.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}` : "扫描 06:00 至当前时点";
+  renderEastmoneySession();
+}
+
+function renderEastmoneySession() {
+  const button = $("#eastmoneyUnlockButton");
+  button.hidden = state.source !== "eastmoney";
+  const status = state.eastmoneySession?.status || "offline";
+  button.dataset.status = status;
+  const labels = {
+    ready: "正文已解锁",
+    verification_required: "检查核验",
+    waiting: "检查核验",
+    unavailable: "浏览器不可用",
+    offline: "解锁正文",
+  };
+  button.querySelector(".button-label").textContent = labels[status] || "解锁正文";
+  button.title = state.eastmoneySession?.message || "使用项目专属隔离浏览器人工核验一次";
+}
+
+function requestHeaders() {
+  const headers = {};
+  if (!state.refreshTokenRequired) return headers;
+  let token = sessionStorage.getItem("sentiboardRefreshToken") || "";
+  if (!token) token = window.prompt("请输入看板刷新令牌") || "";
+  if (!token) throw new Error("未提供刷新令牌");
+  headers["X-Refresh-Token"] = token;
+  sessionStorage.setItem("sentiboardRefreshToken", token);
+  return headers;
+}
+
+async function unlockEastmoneySession() {
+  const button = $("#eastmoneyUnlockButton");
+  button.disabled = true;
+  button.classList.add("loading");
+  try {
+    const current = state.eastmoneySession?.status || "offline";
+    const shouldOpen = ["offline", "unavailable"].includes(current);
+    const response = await fetch(
+      shouldOpen ? "/api/eastmoney/session/open" : "/api/eastmoney/session",
+      shouldOpen ? { method: "POST", headers: requestHeaders() } : { cache: "no-store" },
+    );
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || payload.error || "隔离浏览器操作失败");
+    state.eastmoneySession = payload;
+    renderEastmoneySession();
+    if (payload.status === "ready") {
+      showToast("人工核验已通过；普通股吧正文将使用隔离会话低频读取", 5200);
+    } else if (shouldOpen) {
+      showToast("隔离窗口已打开。请手动完成滑块，再点击“检查核验”", 7000);
+    } else {
+      showToast(payload.message || "尚未通过核验，请在隔离窗口完成滑块", 5200);
+    }
+  } catch (error) {
+    showToast(`解锁失败：${error.message}`, 5200);
+  } finally {
+    button.disabled = false;
+    button.classList.remove("loading");
+  }
+}
+
+function renderEastmoneySector(sector) {
+  const active = sector.code === state.activeEastmoneySector;
+  const change = Number(sector.changePct || 0);
+  return `<article class="sector-card eastmoney-sector ${active ? "selected" : ""}" tabindex="0" role="button" data-sector-code="${escapeHtml(sector.code)}">
+    <div class="sector-top"><div><span class="rank">${String(sector.rank).padStart(2, "0")}</span><h3>${escapeHtml(sector.name)}</h3></div><span class="sentiment ${change > 0 ? "bull" : change < 0 ? "bear" : "neutral"}">${change > 0 ? "+" : ""}${change.toFixed(2)}%</span></div>
+    <div class="sector-stats"><div class="sector-stat"><span>成交额</span><b>${formatAmount(sector.amount)}</b></div><div class="sector-stat"><span>06:00 后帖子</span><b>${number(sector.scannedPosts)}</b></div></div>
+    <div class="sector-foot"><span class="keywords">${number(sector.candidatePosts)} 篇疑似分析 · ${number(sector.completeStocks)}/10 股票完整</span><span class="view-arrow ui-icon" aria-hidden="true">&#xE8A7;</span></div>
+  </article>`;
+}
+
+function bindEastmoneySectorButtons() {
+  document.querySelectorAll(".eastmoney-sector").forEach((card) => {
+    const select = () => {
+      state.activeEastmoneySector = card.dataset.sectorCode;
+      document.querySelectorAll(".eastmoney-sector").forEach((item) => item.classList.toggle("selected", item === card));
+      renderEastmoneyStocks();
+      $(".stock-section").scrollIntoView({ behavior: "smooth", block: "start" });
+    };
+    card.addEventListener("click", select);
+    card.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); } });
+  });
+}
+
+function renderEastmoneyStocks() {
+  const sectors = state.eastmoneyData?.sectors || [];
+  const sector = sectors.find((item) => item.code === state.activeEastmoneySector) || sectors[0];
+  const stocks = sector?.stocks || [];
+  $("#stockSectionTitle").textContent = sector ? `${sector.name} · 活跃股票 Top 10` : "活跃股票 Top 10";
+  $("#stockSectionDescription").textContent = "点击股票，按需补全 06:00 后技术分析帖正文和图片，并生成社区观点综合倾向";
+  $("#stockTable").innerHTML = stocks.length ? stocks.map((stock) => {
+    const change = Number(stock.changePct || 0);
+    return `<tr class="eastmoney-stock-row" tabindex="0" data-stock-code="${escapeHtml(stock.code)}">
+      <td><div class="stock-name-cell"><span class="table-rank">${String(stock.rank).padStart(2, "0")}</span><span class="stock-name"><b>${escapeHtml(stock.name)}</b><small>${escapeHtml(stock.code)} · ${escapeHtml(stock.sector)}</small></span></div></td>
+      <td>${escapeHtml(stock.sector)}</td>
+      <td><span class="price"><b>¥${Number(stock.price || 0).toFixed(2)}</b><span class="${change > 0 ? "positive" : change < 0 ? "negative" : ""}">${change > 0 ? "+" : ""}${change.toFixed(2)}%</span></span></td>
+      <td><span class="activity-metric"><b>${formatAmount(stock.amount)}</b><small>${Number(stock.turnoverRate || 0).toFixed(2)}% 换手</small></span></td>
+      <td class="counts">${number(stock.scannedPosts)} / ${number(stock.candidatePosts)}</td>
+      <td><span class="window-status ${stock.windowComplete ? "complete" : "partial"}">${stock.windowComplete ? "完整" : "部分"}</span></td>
+      <td><span class="row-arrow ui-icon" aria-hidden="true">&#xE8A7;</span></td>
+    </tr>`;
+  }).join("") : `<tr><td colspan="7" class="empty-row">该板块尚未建立股票样本</td></tr>`;
+  document.querySelectorAll(".eastmoney-stock-row").forEach((row) => {
+    const open = () => openEastmoneyStock(row.dataset.stockCode, row);
+    row.addEventListener("click", open);
+    row.addEventListener("keydown", (event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); open(); } });
+  });
+}
+
+async function openEastmoneyStock(code, trigger) {
+  const stock = (state.eastmoneyData?.sectors || []).flatMap((sector) => sector.stocks || []).find((item) => item.code === code);
+  if (!stock) return;
+  state.lastFocus = trigger;
+  $("#drawerKicker").textContent = `${escapeHtml(code)} · TECHNICAL TOP 10`;
+  $("#drawerTitle").textContent = stock.name;
+  $("#drawerSubtitle").textContent = "正在补全技术分析帖正文、图片与精确发布时间…";
+  $("#drawerContent").innerHTML = `<div class="drawer-loading"><span class="ui-icon">&#xE72C;</span><p>首次读取该股票会逐篇校验候选帖，完成后将使用本地缓存。</p></div>`;
+  $("#drawerNote").textContent = "检查该股时间窗内全部用户帖；普通读者评论不读取，只保留入选文章中原作者的分析型回复。";
+  $("#overlay").hidden = false;
+  $("#drawer").classList.add("open");
+  $("#drawer").setAttribute("aria-hidden", "false");
+  document.body.style.overflow = "hidden";
+  $("#closeDrawer").focus();
+  try {
+    const headers = {};
+    if (state.refreshTokenRequired) {
+      const token = sessionStorage.getItem("sentiboardRefreshToken") || window.prompt("请输入看板刷新令牌") || "";
+      if (!token) throw new Error("未提供刷新令牌");
+      headers["X-Refresh-Token"] = token;
+      sessionStorage.setItem("sentiboardRefreshToken", token);
+    }
+    const response = await fetch(`/api/eastmoney/stock?code=${encodeURIComponent(code)}`, { method: "POST", headers });
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.detail || payload.error || "详情读取失败");
+    if (payload.meta?.verificationRequired) {
+      state.eastmoneySession = { status: "verification_required", message: "东方财富要求重新人工核验" };
+      renderEastmoneySession();
+      showToast("隔离会话已失效，请点击“检查核验”并在窗口中重新完成滑块", 6200);
+    }
+    renderEastmoneyStockDetail(payload);
+  } catch (error) {
+    $("#drawerContent").innerHTML = `<div class="drawer-empty"><h3>详情读取失败</h3><p>${escapeHtml(error.message)}</p></div>`;
+  }
+}
+
+function renderEastmoneyStockDetail(data) {
+  const view = data.communityView || {};
+  const posts = data.posts || [];
+  $("#drawerSubtitle").textContent = `${data.meta?.dataDate || "今日"} 06:00 后 · ${number(data.quality?.scanned)} 帖扫描 · ${number(posts.length)} 篇入选`;
+  const risks = (view.riskTriggers || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  const authorPlans = (view.authorPlans || []).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  const summary = `<section class="community-view ${sentimentClass(view.stance)}">
+    <div class="community-view-head"><span>社区综合倾向</span><strong>${escapeHtml(view.stance || "证据不足")}</strong><em>置信度 ${number(view.confidence)}%</em></div>
+    <h3>${escapeHtml(view.summary || "")}</h3>
+    <div class="view-decisions"><div><span>互动加权买卖倾向</span><b>${escapeHtml(view.tradeTendency || "证据不足")}</b></div><div><span>后续走势判断</span><b>${escapeHtml(view.outlook || "证据不足")}</b></div></div>
+    <p>${escapeHtml(view.observationPlan || "")}</p>
+    <div class="evidence-tags">${(view.commonEvidence || []).map((item) => `<span>${escapeHtml(item)}</span>`).join("")}</div>
+    ${authorPlans ? `<div class="author-plan-summary"><b>帖主给出的代表性动作/条件</b><ul>${authorPlans}</ul></div>` : ""}
+    <ul>${risks}</ul><small>${escapeHtml(view.disclaimer || "")}</small>
+  </section>`;
+  const cards = posts.length ? posts.map(renderGubaPost).join("") : `<div class="drawer-empty"><h3>没有足够的技术分析帖</h3><p>系统已过滤辱骂、喊单、引流、非当天帖子及证据不足内容。</p></div>`;
+  $("#drawerContent").innerHTML = `${summary}<section class="drawer-section"><div class="drawer-section-head"><div><span>TOP 10 POSTS</span><h3>互动综合最高的技术分析</h3></div><small>浏览 + 点赞×8 + 评论×12</small></div>${cards}</section>`;
+  bindPostImages();
+}
+
+function renderGubaPost(post) {
+  const images = (post.images || []).filter(Boolean).slice(0, 12);
+  const gallery = images.length ? `<div class="post-gallery gallery-${Math.min(images.length, 4)}">${images.map((url, index) => `<button class="post-image" type="button" data-image-url="${escapeHtml(url)}" data-image-label="${escapeHtml(post.title)} · 图片 ${index + 1}"><img src="${escapeHtml(url)}" alt="${escapeHtml(post.title)}，图片 ${index + 1}" loading="lazy" referrerpolicy="no-referrer" /></button>`).join("")}</div>` : "";
+  const authorReplies = (post.authorReplies || []).map((reply, replyIndex) => {
+    const replyImages = (reply.images || []).map((url, imageIndex) => `<button class="post-image" type="button" data-image-url="${escapeHtml(url)}" data-image-label="帖主回复 ${replyIndex + 1} · 图片 ${imageIndex + 1}"><img src="${escapeHtml(url)}" alt="帖主回复图片 ${imageIndex + 1}" loading="lazy" referrerpolicy="no-referrer" /></button>`).join("");
+    return `<div class="author-reply"><div><b>帖主补充分析</b><span>${escapeHtml(reply.publishedAt)} · ${number(reply.likeCount)} 赞</span></div><p>${escapeHtml(reply.content)}</p>${replyImages ? `<div class="post-gallery">${replyImages}</div>` : ""}</div>`;
+  }).join("");
+  const guidance = post.guidance || {};
+  const conditions = (guidance.conditions || []).slice(0, 3).map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  const guidanceBox = `<section class="post-guidance"><div><span>买卖倾向</span><b>${escapeHtml(guidance.tradeBias || "未明确")}</b></div><div><span>后续走势</span><b>${escapeHtml(guidance.outlook || "未明确")}</b></div>${conditions ? `<ul>${conditions}</ul>` : ""}</section>`;
+  return `<article class="post-card guba-post-card">
+    <div class="post-number"><span>TOP ${number(post.rank)} · <i class="evidence-badge level-${String(post.qualityTier || "b").toLowerCase()}">${number(post.analysisScore)} 分</i></span><span class="sentiment ${sentimentClass(post.sentiment)}">${escapeHtml(post.sentiment)}</span></div>
+    <h3>${escapeHtml(post.title)}</h3><p class="guba-post-content">${escapeHtml(post.content || "")}</p>${gallery}${guidanceBox}
+    <div class="evidence-tags">${(post.analysisReasons || []).map((reason) => `<span>${escapeHtml(reason)}</span>`).join("")}</div>
+    <div class="post-meta"><span class="post-author"><b>${escapeHtml(post.author)}</b><span>${escapeHtml(post.publishedAt)}</span></span><span class="engagement"><span>浏览 ${number(post.readCount)}</span><span>赞 ${number(post.likeCount)}</span><span>评 ${number(post.commentCount)}</span></span></div>
+    ${authorReplies ? `<section class="author-replies"><h4>原作者在评论区的有效补充</h4>${authorReplies}</section>` : ""}
+    <a class="post-link" href="${escapeHtml(post.url)}" target="_blank" rel="noopener noreferrer"><span>在东方财富查看原帖</span><span class="ui-icon">&#xE8A7;</span></a>
+  </article>`;
 }
 
 function renderDataQuality(quality) {
@@ -490,7 +816,7 @@ function closeDrawer() {
 }
 
 async function refreshData() {
-  if (state.data?.meta?.mode === "history") {
+  if (state.source === "xhs" && state.data?.meta?.mode === "history") {
     showToast("历史快照为只读；请先返回今天再刷新", 3200);
     return;
   }
@@ -498,7 +824,7 @@ async function refreshData() {
   button.disabled = true;
   button.classList.add("loading");
   button.querySelector(".button-label").textContent = "正在刷新";
-  showToast("正在检查数据源并更新快照…", 5000);
+  showToast(state.source === "eastmoney" ? "正在分页扫描 100 只股票 06:00 后的全部发帖，这可能需要几分钟…" : "正在检查数据源并更新快照…", 8000);
   try {
     const headers = {};
     if (state.refreshTokenRequired) {
@@ -508,18 +834,26 @@ async function refreshData() {
       headers["X-Refresh-Token"] = token;
       sessionStorage.setItem("sentiboardRefreshToken", token);
     }
-    const response = await fetch("/api/refresh", { method: "POST", headers });
+    const endpoint = state.source === "eastmoney" ? "/api/eastmoney/refresh" : "/api/refresh";
+    const response = await fetch(endpoint, { method: "POST", headers });
     if (response.status === 401) sessionStorage.removeItem("sentiboardRefreshToken");
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.detail || payload.error || "刷新失败");
-    state.data = payload;
-    state.selectedDate = null;
-    render();
-    renderDatePicker();
-    const requestSummary = payload.meta.requestCount ? ` · ${number(payload.meta.searchRequests)} 次搜索 / ${number(payload.meta.detailRequests)} 次详情` : "";
-    showToast(payload.meta.mode === "live" || payload.meta.mode === "mixed"
-      ? `${payload.meta.xhsMessage || "刷新完成，已更新小红书公开数据"}${requestSummary}`
-      : (payload.meta.xhsMessage || "刷新完成；今天暂无发布日期可验证的帖子"), 3400);
+    if (state.source === "eastmoney") {
+      state.eastmoneyData = payload;
+      state.activeEastmoneySector = payload.sectors?.[0]?.code || null;
+      render();
+      showToast(`${payload.meta.message || "东方财富社区扫描完成"} · ${number(payload.summary?.pagesScanned)} 页 / ${number(payload.summary?.scannedPosts)} 帖`, 5200);
+    } else {
+      state.data = payload;
+      state.selectedDate = null;
+      render();
+      renderDatePicker();
+      const requestSummary = payload.meta.requestCount ? ` · ${number(payload.meta.searchRequests)} 次搜索 / ${number(payload.meta.detailRequests)} 次详情` : "";
+      showToast(payload.meta.mode === "live" || payload.meta.mode === "mixed"
+        ? `${payload.meta.xhsMessage || "刷新完成，已更新小红书公开数据"}${requestSummary}`
+        : (payload.meta.xhsMessage || "刷新完成；今天暂无发布日期可验证的帖子"), 3400);
+    }
   } catch (error) {
     showToast(`刷新失败：${error.message}`, 4200);
   } finally {
@@ -541,6 +875,10 @@ function showToast(message, duration = 2600) {
 document.addEventListener("DOMContentLoaded", () => {
   loadDashboard().catch((error) => showToast(error.message, 5000));
   $("#refreshButton").addEventListener("click", refreshData);
+  $("#eastmoneyUnlockButton").addEventListener("click", unlockEastmoneySession);
+  document.querySelectorAll(".source-tab").forEach((button) => button.addEventListener("click", () => {
+    switchSource(button.dataset.source).catch((error) => showToast(error.message, 5000));
+  }));
   $("#historyButton").addEventListener("click", (event) => openHistory(event.currentTarget));
   $("#dateButton").addEventListener("click", () => {
     if ($("#datePopover").hidden) openDatePicker(); else closeDatePicker();

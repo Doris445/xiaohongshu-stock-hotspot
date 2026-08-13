@@ -19,6 +19,10 @@ FORBIDDEN_TRACKED = {
     ".env",
     "data/cache.json",
     "data/xhs_samples.json",
+    "data/eastmoney_cache.json",
+    "data/eastmoney_stock_details.json",
+    "data/eastmoney_request_state.json",
+    "data/eastmoney_browser_profile/",
     "server.log",
     "server-error.log",
 }

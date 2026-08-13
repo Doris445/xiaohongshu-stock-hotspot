@@ -35,6 +35,12 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json(200, dashboard)
             return
+        if path == "/api/eastmoney":
+            self._json(200, SERVICE.current_eastmoney())
+            return
+        if path == "/api/eastmoney/session":
+            self._json(200, SERVICE.eastmoney_session_status())
+            return
         if path == "/api/health":
             self._json(200, {"ok": True})
             return
@@ -58,7 +64,11 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
-        if parsed.path not in {"/api/refresh", "/api/history/validate"}:
+        if parsed.path not in {
+            "/api/refresh", "/api/history/validate", "/api/eastmoney/refresh",
+            "/api/eastmoney/stock",
+            "/api/eastmoney/session/open",
+        }:
             self._json(404, {"error": "Not found"})
             return
         if settings.refresh_token:
@@ -73,6 +83,13 @@ class Handler(BaseHTTPRequestHandler):
                     self._json(400, {"error": "日期格式必须为 YYYY-MM-DD"})
                     return
                 data = SERVICE.validate_midday(source_date)
+            elif parsed.path == "/api/eastmoney/refresh":
+                data = SERVICE.refresh_eastmoney()
+            elif parsed.path == "/api/eastmoney/stock":
+                code = (parse_qs(parsed.query).get("code") or [""])[0]
+                data = SERVICE.eastmoney_stock_detail(code)
+            elif parsed.path == "/api/eastmoney/session/open":
+                data = SERVICE.open_eastmoney_session()
             else:
                 data = SERVICE.refresh()
             self._json(200, data)
