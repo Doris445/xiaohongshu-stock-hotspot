@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import json
+import math
+import os
 import threading
 import time
 from collections import defaultdict
@@ -14,11 +16,14 @@ from llm import LLMAnalyzer
 from providers import (
     AgentReachXHSProvider,
     EastmoneySectorConstituentProvider,
-    STOCK_TARGETS,
+    EastmoneySectorQuoteProvider,
+    INDEX_SYMBOLS,
+    SECTOR_BOARD_CODES,
     TencentQuoteProvider,
     china_now,
     is_xhs_post_today,
     parse_xhs_published_date,
+    stock_symbol,
 )
 
 
@@ -26,6 +31,7 @@ ROOT = Path(__file__).resolve().parent
 FIXTURE_PATH = ROOT / "data" / "demo.json"
 CACHE_PATH = ROOT / "data" / "cache.json"
 XHS_SAMPLE_CACHE_PATH = ROOT / "data" / "xhs_samples.json"
+REQUEST_STATE_PATH = ROOT / "data" / "request_state.json"
 SECTOR_UNIVERSE_CACHE_PATH = ROOT / "data" / "sector_universe.json"
 HISTORY_ROOT = ROOT / "data" / "history"
 
@@ -44,18 +50,26 @@ class DashboardService:
         self._lock = threading.Lock()
         self.quote_provider = TencentQuoteProvider()
         self.sector_provider = EastmoneySectorConstituentProvider()
+        self.sector_quote_provider = EastmoneySectorQuoteProvider()
         self.xhs_provider = AgentReachXHSProvider()
         self.llm_analyzer = LLMAnalyzer()
         self.history_archive = HistoryArchive(HISTORY_ROOT)
         self._data = self._load_initial()
+        if os.environ.get("STOCK_DASHBOARD_DISABLE_NETWORK") != "1":
+            connection = self.xhs_provider.status()
+            self._data.setdefault("meta", {}).update(
+                {
+                    "xhsStatus": connection.get("status"),
+                    "xhsBackend": connection.get("backend"),
+                    "xhsMessage": connection.get("message"),
+                }
+            )
         cached_samples = self._load_xhs_samples()
         self._xhs_samples = {
             url: post for url, post in cached_samples.items() if is_xhs_post_today(post)
         }
         self._sector_universe = self._load_sector_universe()
-        self._last_xhs_refresh = (
-            XHS_SAMPLE_CACHE_PATH.stat().st_mtime if XHS_SAMPLE_CACHE_PATH.exists() else 0.0
-        )
+        self._last_xhs_refresh = self._load_request_state()
         self._xhs_cooldown_seconds = 15 * 60
         self._data = self._prepare_daily_view(self._data)
         if cached_samples and XHS_SAMPLE_CACHE_PATH.exists():
@@ -68,6 +82,22 @@ class DashboardService:
     def _load_initial(self) -> dict[str, Any]:
         path = CACHE_PATH if CACHE_PATH.exists() else FIXTURE_PATH
         return json.loads(path.read_text(encoding="utf-8"))
+
+    @staticmethod
+    def _load_request_state() -> float:
+        try:
+            payload = json.loads(REQUEST_STATE_PATH.read_text(encoding="utf-8"))
+            value = float(payload.get("lastPlatformRequestAt") or 0)
+            return value if value > 0 else 0.0
+        except (OSError, ValueError, TypeError, json.JSONDecodeError):
+            return 0.0
+
+    def _record_platform_request(self, timestamp: float) -> None:
+        self._last_xhs_refresh = timestamp
+        REQUEST_STATE_PATH.write_text(
+            json.dumps({"lastPlatformRequestAt": timestamp}, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
     @staticmethod
     def _load_xhs_samples() -> dict[str, dict[str, Any]]:
@@ -158,18 +188,6 @@ class DashboardService:
                     "query": f"今日 {date_label} 机器人 人形机器人 个股 股票",
                     "targetType": "sector", "targetName": "机器人", "detailLimit": 3,
                 },
-                {
-                    "query": f"今日 {date_label} 中际旭创 新易盛 沪电股份 工业富联 寒武纪",
-                    "targetType": "stock-batch",
-                    "targetName": "股票池 1-5",
-                    "detailLimit": 2,
-                },
-                {
-                    "query": f"今日 {date_label} 胜宏科技 兆易创新 中芯国际 光迅科技 生益科技",
-                    "targetType": "stock-batch",
-                    "targetName": "股票池 6-10",
-                    "detailLimit": 2,
-                },
             ]
             fresh_universe = self.sector_provider.fetch()
             if fresh_universe:
@@ -193,21 +211,29 @@ class DashboardService:
                     "backend": data.get("meta", {}).get("xhsBackend", "OpenCLI"),
                     "message": f"账号安全冷却中，约 {max(1, cooldown_remaining // 60)} 分钟后可再次采样",
                     "cooldown": True,
+                    "platformRequestAttempted": False,
+                    "requestCount": 0,
                 }
             else:
                 xhs_posts, xhs_state = self.xhs_provider.collect(
                     broad_specs,
                     limit=12,
-                    detail_limit=3,
+                    detail_limit=6,
                     known_posts=self._xhs_samples,
+                    reuse_discovery=False,
                 )
-                self._last_xhs_refresh = time.time()
+                if xhs_state.get("platformRequestAttempted"):
+                    self._record_platform_request(time.time())
 
-            llm_state = self.llm_analyzer.enrich_posts(xhs_posts)
+            self._annotate_evidence(xhs_posts)
+            evidence_posts = [
+                post for post in xhs_posts if post.get("evidenceLevel") in {"A", "B"}
+            ]
+            llm_state = self.llm_analyzer.enrich_posts(evidence_posts)
 
             new_posts = 0
             updated_posts = 0
-            if not cooldown_remaining:
+            if xhs_posts:
                 for post in (post for post in xhs_posts if is_xhs_post_today(post, now)):
                     url = post.get("url") or ""
                     if not url:
@@ -219,6 +245,7 @@ class DashboardService:
                         updated_posts += 1
                     self._xhs_samples[url] = post
                 # The disk cache is a same-day pool, never a historical archive.
+                # An unavailable backend or empty failed response never erases it.
                 self._xhs_samples = dict(list(self._xhs_samples.items())[-300:])
                 XHS_SAMPLE_CACHE_PATH.write_text(
                     json.dumps(self._xhs_samples, ensure_ascii=False, indent=2),
@@ -230,7 +257,7 @@ class DashboardService:
                     "sampledTargets": [item["targetName"] for item in broad_specs],
                     "newPosts": new_posts,
                     "updatedPosts": updated_posts,
-                    "samplingMode": "今日宽搜增量模式",
+                    "samplingMode": "今日详情恢复模式" if xhs_state.get("discoveryMode") == "reused" else "今日宽搜增量模式",
                     "sectorUniverseSource": universe_source,
                     "sectorStockFormula": "按今日提及帖数排序；识别标题、正文、tags 与图片 OCR 文字",
                     "ocrStatus": xhs_state.get("ocrStatus", data.get("meta", {}).get("ocrStatus", "not-loaded")),
@@ -241,19 +268,27 @@ class DashboardService:
                     "llmStatus": llm_state.get("status"),
                     "llmMessage": llm_state.get("message"),
                     "llmAnalyzedPosts": llm_state.get("analyzedPosts", 0),
+                    "requestCount": int(xhs_state.get("requestCount") or 0),
+                    "searchRequests": int(xhs_state.get("searchRequests") or 0),
+                    "detailRequests": int(xhs_state.get("detailRequests") or 0),
+                    "selectedForDetail": int(xhs_state.get("selectedForDetail") or 0),
+                    "cooldownSeconds": self._xhs_cooldown_seconds,
+                    "nextSafeRefreshAt": (
+                        datetime.fromtimestamp(
+                            self._last_xhs_refresh + self._xhs_cooldown_seconds,
+                            tz=now.tzinfo,
+                        ).isoformat(timespec="seconds")
+                        if self._last_xhs_refresh else None
+                    ),
                 }
             )
 
-            quotes = self.quote_provider.fetch()
-            targets_by_code = {target.code: target for target in STOCK_TARGETS}
+            quotes = self.quote_provider.fetch([str(stock.get("code") or "") for stock in data["stocks"]])
             verified_quotes = 0
             for stock in data["stocks"]:
                 stock["price"] = None
                 stock["changePct"] = None
-                target = targets_by_code.get(stock.get("code"))
-                if not target:
-                    continue
-                quote = quotes.get(target.symbol)
+                quote = quotes.get(stock_symbol(str(stock.get("code") or "")))
                 if quote and quote.get("quoteDate") == today:
                     stock["price"] = quote["price"]
                     stock["changePct"] = quote["changePct"]
@@ -291,6 +326,170 @@ class DashboardService:
             snapshot = self.history_archive.latest_public_snapshot(source_date)
             return copy.deepcopy(snapshot) if snapshot else None
 
+    def validate_midday(self, source_date: str) -> dict[str, Any]:
+        """Compare a frozen social snapshot with the current midday market snapshot.
+
+        A snapshot captured after 11:30 may describe a useful same-day
+        contradiction, but it is never promoted to a predictive accuracy score.
+        """
+        with self._lock:
+            now = china_now()
+            today = now.date().isoformat()
+            if source_date != today:
+                raise ValueError("目前只能新建当天午盘验证；历史日期使用当日已保存的行情快照")
+            if (now.hour, now.minute) < (11, 30):
+                raise ValueError("午盘尚未结束，11:30 后才能验证")
+
+            latest = self.history_archive.latest_snapshot(source_date)
+            if not latest:
+                raise ValueError(f"{source_date} 没有可验证的小红书快照")
+            cutoff_at = datetime.fromisoformat(f"{source_date}T11:30:00+08:00")
+            strict = self.history_archive.snapshot_at_or_before(source_date, cutoff_at)
+
+            def directional_count(snapshot: dict[str, Any] | None) -> int:
+                if not snapshot:
+                    return 0
+                prediction = snapshot.get("prediction") or {}
+                return sum(
+                    str(item.get("sentiment") or "").endswith(("看多", "看空"))
+                    for item in [*(prediction.get("sectors") or []), *(prediction.get("stocks") or [])]
+                )
+
+            strict_signals = directional_count(strict)
+            selected = strict if strict_signals else latest
+            selected_captured = datetime.fromisoformat(str(selected.get("capturedAt")))
+            is_forecast = selected_captured <= cutoff_at and directional_count(selected) > 0
+            prediction = selected.get("prediction") or {}
+            stock_codes = [
+                str(item.get("code") or "")
+                for item in prediction.get("stocks") or []
+                if str(item.get("code") or "").isdigit()
+            ]
+            stock_symbols = [stock_symbol(code) for code in stock_codes]
+            quotes = self.quote_provider.fetch_symbols([*INDEX_SYMBOLS, *stock_symbols])
+            dated_quotes = {
+                symbol: quote
+                for symbol, quote in quotes.items()
+                if quote.get("quoteDate") == source_date
+            }
+            if not any(symbol in dated_quotes for symbol in INDEX_SYMBOLS):
+                raise ValueError("腾讯行情未返回当天指数快照，已拒绝使用旧行情")
+
+            quote_times = [
+                str(quote.get("quoteAt") or "")
+                for quote in dated_quotes.values()
+                if str(quote.get("quoteAt") or "")
+            ]
+            raw_market_at = max(quote_times) if quote_times else ""
+            try:
+                market_as_of = datetime.strptime(raw_market_at[:14], "%Y%m%d%H%M%S").replace(
+                    tzinfo=now.tzinfo
+                ).isoformat(timespec="seconds")
+            except ValueError:
+                market_as_of = now.isoformat(timespec="seconds")
+            quote_hhmm = int(raw_market_at[8:12]) if len(raw_market_at) >= 12 else now.hour * 100 + now.minute
+            if quote_hhmm > 1300:
+                public = self.history_archive.latest_public_snapshot(source_date) or {}
+                canonical = next(
+                    (
+                        item for item in reversed(public.get("validations") or [])
+                        if item.get("isCanonicalMidday")
+                    ),
+                    None,
+                )
+                if canonical:
+                    return canonical
+                raise ValueError("当前已进入下午交易，且没有已保存的午盘行情；已拒绝用下午行情冒充午盘")
+
+            sector_quotes = self.sector_quote_provider.fetch()
+            outcomes: dict[str, dict[str, Any]] = {}
+            for name, quote in sector_quotes.items():
+                outcome = {**quote, "quoteAt": market_as_of}
+                outcomes[name] = outcome
+            for item in prediction.get("stocks") or []:
+                code = str(item.get("code") or "")
+                quote = dated_quotes.get(stock_symbol(code))
+                if not quote:
+                    continue
+                outcome = {
+                    **quote,
+                    "name": quote.get("name") or item.get("name"),
+                    "quoteAt": market_as_of,
+                }
+                outcomes[code] = outcome
+
+            indices = [
+                {
+                    "symbol": symbol,
+                    "name": quote.get("name") or INDEX_SYMBOLS[symbol],
+                    "price": quote.get("price"),
+                    "changePct": quote.get("changePct"),
+                    "quoteAt": market_as_of,
+                }
+                for symbol in INDEX_SYMBOLS
+                if (quote := dated_quotes.get(symbol))
+            ]
+            sectors = [sector_quotes[name] for name in SECTOR_BOARD_CODES if name in sector_quotes]
+            comparison_mode = "forecast" if is_forecast else "same-day-observation"
+            metadata = {
+                "comparisonMode": comparison_mode,
+                "eligibleForAccuracy": is_forecast,
+                "predictionCutoff": cutoff_at.isoformat(timespec="seconds"),
+                "lookaheadWarning": not is_forecast,
+                "strictSnapshotId": strict.get("snapshotId") if strict else None,
+                "strictCapturedAt": strict.get("capturedAt") if strict else None,
+                "strictDirectionalSignals": strict_signals,
+                "marketPeriod": "午盘",
+                "isCanonicalMidday": True,
+                "marketSource": "腾讯指数/个股 + 东方财富板块",
+                "marketSnapshot": {
+                    "indices": indices,
+                    "sectors": sectors,
+                    "trackedSectorUp": sum(float(item.get("changePct") or 0) > 0 for item in sectors),
+                    "trackedSectorDown": sum(float(item.get("changePct") or 0) < 0 for item in sectors),
+                },
+            }
+            return self.history_archive.save_validation(
+                source_date=source_date,
+                outcome_date=source_date,
+                market_as_of=market_as_of,
+                outcomes=outcomes,
+                snapshot_id=selected.get("snapshotId"),
+                metadata=metadata,
+            )
+
+    def dashboard_for_date(self, source_date: str) -> dict[str, Any] | None:
+        """Rebuild a complete read-only dashboard from a private daily archive."""
+        with self._lock:
+            today = china_now().date().isoformat()
+            if source_date == today:
+                self._xhs_samples = {
+                    url: post for url, post in self._xhs_samples.items() if is_xhs_post_today(post)
+                }
+                self._data = self._prepare_daily_view(self._data)
+                return copy.deepcopy(self._data)
+
+            snapshot = self.history_archive.latest_snapshot(source_date)
+            if not snapshot:
+                return None
+            posts = [post for post in (snapshot.get("posts") or []) if isinstance(post, dict)]
+            dashboard = self._prepare_historical_view(source_date, posts)
+            captured_at = str(snapshot.get("capturedAt") or "")
+            dashboard["meta"].update(
+                {
+                    "updatedAt": captured_at,
+                    "updatedLabel": captured_at[5:16].replace("-", "月").replace("T", "日 ") if captured_at else source_date,
+                    "historicalCapturedAt": captured_at,
+                    "historicalSnapshotId": snapshot.get("snapshotId"),
+                    "historicalPostsSha256": snapshot.get("postsSha256"),
+                    "sampledEntityCount": sum(
+                        item.get("dataSource") == "live"
+                        for item in [*dashboard.get("sectors", []), *dashboard.get("stocks", [])]
+                    ),
+                }
+            )
+            return copy.deepcopy(dashboard)
+
     def _archive_samples(
         self,
         samples: dict[str, dict[str, Any]],
@@ -319,6 +518,7 @@ class DashboardService:
         current = now or china_now()
         today = current.date().isoformat()
         today_posts = [post for post in self._xhs_samples.values() if is_xhs_post_today(post, current)]
+        self._annotate_evidence(today_posts)
         market_is_today = data.get("meta", {}).get("marketDate") == today
         self._reset_entities(data, preserve_market=market_is_today)
 
@@ -366,12 +566,14 @@ class DashboardService:
                 }
             )
         data["summary"] = self._build_summary(data, today_posts)
+        meta["dataQuality"] = self._build_data_quality(today_posts, data)
         return data
 
     def _prepare_historical_view(
         self, source_date: str, posts: list[dict[str, Any]]
     ) -> dict[str, Any]:
         data = copy.deepcopy(self._load_initial())
+        self._annotate_evidence(posts)
         self._reset_entities(data, preserve_market=False)
         if posts:
             data = self._merge_live_posts(data, posts)
@@ -390,16 +592,81 @@ class DashboardService:
             "marketSource": "等待后续交易日行情验证",
         }
         data["summary"] = self._build_summary(data, posts)
+        data["meta"]["dataQuality"] = self._build_data_quality(posts, data)
         return data
+
+    @staticmethod
+    def _annotate_evidence(posts: list[dict[str, Any]]) -> None:
+        """Separate discovery-only heat from evidence that may decide direction."""
+        for post in posts:
+            has_detail_text = bool(str(post.get("content") or "").strip() or post.get("tags"))
+            has_ocr = bool(str(post.get("imageOcrText") or "").strip())
+            has_title = bool(str(post.get("title") or "").strip())
+            if has_detail_text:
+                level, weight = "A", 1.0
+            elif has_ocr:
+                level, weight = "B", 0.85
+            elif has_title:
+                level, weight = "C", 0.35
+            else:
+                level, weight = "D", 0.0
+            post["evidenceLevel"] = level
+            post["evidenceWeight"] = weight
+            if "commentCountAvailable" not in post:
+                post["commentCountAvailable"] = post.get("comments") is not None and bool(post.get("isDetailed"))
+            if not post.get("commentCountAvailable"):
+                post["comments"] = None
+
+    @staticmethod
+    def _build_data_quality(posts: list[dict[str, Any]], data: dict[str, Any]) -> dict[str, Any]:
+        total = len(posts)
+        unique = len({post.get("url") or f"local:{index}" for index, post in enumerate(posts)})
+        detailed = sum(bool(post.get("isDetailed")) for post in posts)
+        evidence = sum(post.get("evidenceLevel") in {"A", "B"} for post in posts)
+        comments_available = sum(bool(post.get("commentCountAvailable")) for post in posts)
+        entities = [*data.get("sectors", []), *data.get("stocks", [])]
+        covered = [item for item in entities if item.get("dataSource") == "live"]
+        qualified = [item for item in covered if item.get("signalTier") == "qualified"]
+        preliminary = [item for item in covered if item.get("signalTier") == "preliminary"]
+        if total == 0:
+            status, label, message = "empty", "暂无样本", "当天尚无可验证帖子。"
+        elif evidence == 0:
+            status, label, message = "insufficient", "仅标题，情绪不可判定", "标题样本可统计热度，但不能作为方向证据。"
+        elif detailed / total >= 0.6 and qualified:
+            status, label, message = "ready", "证据可用", "详情证据已覆盖主要样本，仍请结合行情独立判断。"
+        elif preliminary:
+            status, label, message = "partial", "已有初步情绪线索", "低样本实体以“线索/初步”标注，不冒充高置信度结论。"
+        else:
+            status, label, message = "partial", "证据部分可用", "仅对达到证据门槛的实体显示方向。"
+        return {
+            "status": status,
+            "label": label,
+            "message": message,
+            "discoveredPosts": total,
+            "uniquePct": round(unique / total * 100) if total else 0,
+            "dateValidityPct": 100 if total else 0,
+            "detailedPosts": detailed,
+            "evidencePosts": evidence,
+            "titleOnlyPosts": sum(post.get("evidenceLevel") == "C" for post in posts),
+            "commentCoveragePct": round(comments_available / total * 100) if total else 0,
+            "imagePosts": sum(bool(post.get("images")) for post in posts),
+            "qualifiedEntities": len(qualified),
+            "preliminaryEntities": len(preliminary),
+            "coveredEntities": len(covered),
+            "totalEntities": len(entities),
+        }
 
     def _reset_entities(self, data: dict[str, Any], preserve_market: bool) -> None:
         for sector in data.get("sectors", []):
             sector.update(
                 {
                     "posts": 0,
-                    "comments": 0,
+                    "comments": None,
+                    "commentsAvailable": False,
                     "score": 0,
-                    "sentiment": "暂无",
+                    "sentiment": "样本不足",
+                    "confidence": 0,
+                    "signalTier": "none",
                     "change": 0,
                     "keywords": [],
                     "topPosts": [],
@@ -419,9 +686,12 @@ class DashboardService:
             stock.update(
                 {
                     "posts": 0,
-                    "comments": 0,
+                    "comments": None,
+                    "commentsAvailable": False,
                     "score": 0,
-                    "sentiment": "暂无",
+                    "sentiment": "样本不足",
+                    "confidence": 0,
+                    "signalTier": "none",
                     "heatChange": 0,
                     "topPosts": [],
                     "dataSource": "empty",
@@ -435,10 +705,10 @@ class DashboardService:
     @staticmethod
     def _sort_and_rank_entities(data: dict[str, Any]) -> None:
         data["sectors"].sort(
-            key=lambda item: (item.get("posts", 0), item.get("comments", 0)), reverse=True
+            key=lambda item: (int(item.get("posts") or 0), int(item.get("comments") or 0)), reverse=True
         )
         data["stocks"].sort(
-            key=lambda item: (item.get("posts", 0), item.get("comments", 0)), reverse=True
+            key=lambda item: (int(item.get("posts") or 0), int(item.get("comments") or 0)), reverse=True
         )
         for rank, sector in enumerate(data["sectors"], start=1):
             sector["rank"] = rank
@@ -523,8 +793,135 @@ class DashboardService:
                 "constituents": len(self._sector_universe.get(sector_name, [])),
             }
 
+        # The main Top 10 is derived from all current sector constituents, not
+        # from the old fixed watchlist. One post contributes at most one mention.
+        universe: dict[str, dict[str, Any]] = {}
+        for sector_name, stocks in self._sector_universe.items():
+            for stock in stocks:
+                code = str(stock.get("code") or "")
+                if not code:
+                    continue
+                row = universe.setdefault(
+                    code,
+                    {"code": code, "name": stock.get("name") or code, "sectors": []},
+                )
+                if sector_name not in row["sectors"]:
+                    row["sectors"].append(sector_name)
+
+        dynamic: list[dict[str, Any]] = []
+        for stock in universe.values():
+            aliases = [normalize(stock["name"]), normalize(stock["code"])]
+            matches = [
+                post for post, text, ocr_text in prepared
+                if any(alias and (alias in text or alias in ocr_text) for alias in aliases)
+            ]
+            if not matches:
+                continue
+            comments = [int(post.get("comments") or 0) for post in matches if post.get("commentCountAvailable")]
+            signal = self._entity_signal(matches)
+            top_posts = sorted(
+                [post for post in matches if post.get("evidenceLevel") in {"A", "B"}] or matches,
+                key=lambda post: int(post.get("engagement") or 0),
+                reverse=True,
+            )[:3]
+            capped_heat = sum(
+                min(8.0, 1.0 + math.log1p(int(post.get("likes") or 0) + int(post.get("comments") or 0)))
+                for post in matches
+            )
+            dynamic.append(
+                {
+                    "name": stock["name"],
+                    "code": stock["code"],
+                    "sector": " / ".join(stock["sectors"][:2]),
+                    "price": None,
+                    "changePct": None,
+                    "heatScore": round(len(matches) * 10 + capped_heat, 1),
+                    "heatChange": 0,
+                    "posts": len(matches),
+                    "comments": sum(comments) if comments else None,
+                    "commentsAvailable": bool(comments),
+                    "commentCoveragePct": round(len(comments) / len(matches) * 100),
+                    "topPosts": top_posts,
+                    "dataSource": "live",
+                    "sampledAt": china_now().isoformat(timespec="seconds"),
+                    **signal,
+                }
+            )
+        dynamic.sort(
+            key=lambda item: (int(item.get("posts") or 0), float(item.get("heatScore") or 0), item["name"]),
+            reverse=True,
+        )
+
+        existing = {str(stock.get("code") or ""): copy.deepcopy(stock) for stock in data.get("stocks", [])}
+        selected_codes = {stock["code"] for stock in dynamic[:10]}
+        fillers: list[dict[str, Any]] = []
+        for code, stock in existing.items():
+            if not code or code in selected_codes:
+                continue
+            stock.update(
+                {
+                    "posts": 0, "comments": None, "commentsAvailable": False,
+                    "score": 0, "sentiment": "样本不足", "confidence": 0,
+                    "signalTier": "none",
+                    "heatScore": 0, "heatChange": 0, "topPosts": [],
+                    "dataSource": "empty", "sampledAt": None,
+                }
+            )
+            fillers.append(stock)
+            if len(dynamic[:10]) + len(fillers) >= 10:
+                break
+        data["stocks"] = (dynamic[:10] + fillers)[:10]
+
     @staticmethod
-    def _merge_live_posts(data: dict[str, Any], posts: list[dict[str, Any]]) -> dict[str, Any]:
+    def _entity_signal(matches: list[dict[str, Any]]) -> dict[str, Any]:
+        evidence = [post for post in matches if post.get("evidenceLevel") in {"A", "B"}]
+        authors = {
+            str(post.get("author") or "").strip()
+            for post in evidence
+            if str(post.get("author") or "").strip() not in {"", "小红书用户"}
+        }
+        weights: list[float] = []
+        weighted_scores: list[float] = []
+        for post in evidence:
+            interaction = int(post.get("likes") or 0) + int(post.get("comments") or 0)
+            viral_weight = min(8.0, 1.0 + math.log1p(max(0, interaction)))
+            weight = viral_weight * float(post.get("evidenceWeight") or 0)
+            weights.append(weight)
+            weighted_scores.append(float(post.get("sentimentScore") or 0) * weight)
+        raw_score = round(sum(weighted_scores) / sum(weights)) if weights and sum(weights) else 0
+        qualified = len(evidence) >= 3 and len(authors) >= 2
+        agreement = (
+            sum(1 for post in evidence if (post.get("sentimentScore") or 0) * raw_score >= 0) / len(evidence)
+            if evidence and raw_score else 0.5
+        )
+        confidence = min(
+            100,
+            round(min(1, len(evidence) / 6) * 45 + min(1, len(authors) / 4) * 25 + agreement * 30),
+        )
+        if not evidence:
+            return {
+                "score": 0, "sentiment": "样本不足", "confidence": 0,
+                "evidencePosts": 0, "uniqueAuthors": 0, "signalTier": "none",
+            }
+        if not qualified:
+            direction = "看多" if raw_score > 8 else "看空" if raw_score < -8 else "中性"
+            prefix = "初步" if len(evidence) >= 2 and len(authors) >= 2 else "线索"
+            return {
+                "score": raw_score, "sentiment": f"{prefix}{direction}",
+                "confidence": min(confidence, 49 if prefix == "初步" else 29),
+                "evidencePosts": len(evidence), "uniqueAuthors": len(authors),
+                "signalTier": "preliminary",
+            }
+        sentiment = "看多" if raw_score > 8 else "看空" if raw_score < -8 else "中性"
+        return {
+            "score": raw_score, "sentiment": sentiment, "confidence": confidence,
+            "evidencePosts": len(evidence), "uniqueAuthors": len(authors),
+            "signalTier": "qualified",
+        }
+
+    @classmethod
+    def _merge_live_posts(cls, data: dict[str, Any], posts: list[dict[str, Any]]) -> dict[str, Any]:
+        cls._annotate_evidence(posts)
         bullish = (
             "看多", "看好", "突破", "增长", "低估", "机会", "景气", "反转", "反弹",
             "加仓", "抄底", "上涨", "大涨", "起飞", "强势", "拿住", "业绩",
@@ -552,9 +949,11 @@ class DashboardService:
                     f"{post.get('title', '')} {post.get('content', '')} "
                     f"{tags_text} {post.get('imageOcrText', '')}"
                 )
+            if post.get("evidenceLevel") not in {"A", "B"}:
+                label, score = "样本不足", 0
             post["sentiment"] = label
             post["sentimentScore"] = score
-            post["engagement"] = post["likes"] + post["comments"]
+            post["engagement"] = int(post.get("likes") or 0) + int(post.get("comments") or 0)
 
         def searchable_text(post: dict[str, Any]) -> str:
             tags_text = " ".join(post.get("tags") or [])
@@ -581,22 +980,21 @@ class DashboardService:
             ]
             if matches:
                 matches.sort(key=lambda p: p["engagement"], reverse=True)
-                detailed = [post for post in matches if post.get("isDetailed")]
-                top_posts = sorted(detailed or matches, key=lambda p: p["engagement"], reverse=True)[:3]
+                evidence_matches = [post for post in matches if post.get("evidenceLevel") in {"A", "B"}]
+                top_posts = sorted(evidence_matches or matches, key=lambda p: p["engagement"], reverse=True)[:3]
+                comments = [int(p.get("comments") or 0) for p in matches if p.get("commentCountAvailable")]
+                signal = cls._entity_signal(matches)
                 entity["posts"] = len(matches)
-                entity["comments"] = sum(p["comments"] for p in matches)
+                entity["comments"] = sum(comments) if comments else None
+                entity["commentsAvailable"] = bool(comments)
+                entity["commentCoveragePct"] = round(len(comments) / len(matches) * 100)
                 entity["topPosts"] = top_posts
                 entity["dataSource"] = "live"
                 entity["sampledAt"] = china_now().isoformat(timespec="seconds")
-                weighted = sum(p["sentimentScore"] * max(p["engagement"], 1) for p in matches)
-                weight = sum(max(p["engagement"], 1) for p in matches)
-                entity["score"] = round(weighted / weight) if weight else 0
-                entity["sentiment"] = (
-                    "看多" if entity["score"] > 8 else "看空" if entity["score"] < -8 else "中性"
-                )
+                entity.update(signal)
                 if entity_type == "sector":
                     tag_counts: dict[str, int] = {}
-                    for post in detailed:
+                    for post in evidence_matches:
                         for tag in post.get("tags") or []:
                             tag_counts[tag] = tag_counts.get(tag, 0) + 1
                     if tag_counts:
@@ -620,13 +1018,25 @@ class DashboardService:
                 for index, post in enumerate(sample_posts)
             }
             total_posts = len(unique_posts)
-            total_comments = sum(int(post.get("comments") or 0) for post in unique_posts.values())
-            sentiment_stocks = [item for item in data["stocks"] if item.get("dataSource") == "live"]
+            available_comments = [
+                int(post.get("comments") or 0)
+                for post in unique_posts.values()
+                if post.get("commentCountAvailable")
+            ]
+            total_comments = sum(available_comments) if available_comments else None
+            comment_coverage = round(len(available_comments) / total_posts * 100) if total_posts else 0
+            sentiment_stocks = [
+                item for item in data["stocks"]
+                if item.get("dataSource") == "live" and item.get("signalTier") in {"qualified", "preliminary"}
+            ]
         else:
             total_posts = sum(item["posts"] for item in data["sectors"])
-            total_comments = sum(item["comments"] for item in data["sectors"])
-            sentiment_stocks = data["stocks"]
-        positive = [item for item in sentiment_stocks if item["sentiment"] == "看多"]
+            sector_comments = [int(item.get("comments") or 0) for item in data["sectors"] if item.get("commentsAvailable")]
+            total_comments = sum(sector_comments) if sector_comments else None
+            comment_coverage = 100 if sector_comments else 0
+            sentiment_stocks = [item for item in data["stocks"] if item.get("signalTier") in {"qualified", "preliminary"}]
+        positive = [item for item in sentiment_stocks if str(item.get("sentiment") or "").endswith("看多")]
+        qualified_stocks = [item for item in sentiment_stocks if item.get("signalTier") == "qualified"]
         avg = (
             round(sum(item["score"] for item in sentiment_stocks) / len(sentiment_stocks))
             if sentiment_stocks
@@ -635,6 +1045,10 @@ class DashboardService:
         return {
             "posts": total_posts,
             "comments": total_comments,
+            "commentCoveragePct": comment_coverage,
             "bullRatio": round(len(positive) / len(sentiment_stocks) * 100) if sentiment_stocks else 0,
             "sentimentScore": avg,
+            "sentimentStatus": "ready" if qualified_stocks else "preliminary" if sentiment_stocks else "insufficient",
+            "qualifiedStocks": len(qualified_stocks),
+            "preliminaryStocks": len(sentiment_stocks) - len(qualified_stocks),
         }

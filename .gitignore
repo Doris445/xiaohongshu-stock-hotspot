@@ -27,6 +27,7 @@ chrome-profile/
 # Runtime data may include authors, signed URLs and OCR text
 data/cache.json
 data/xhs_samples.json
+data/request_state.json
 data/history/
 data/*.tmp
 

@@ -22,11 +22,30 @@
             <span class="status-dot"></span>
             <span id="updatedLabel">数据加载中</span>
           </div>
-          <button class="history-button" id="historyButton" type="button">
+          <div class="date-control">
+            <button class="date-button" id="dateButton" type="button" aria-label="选择看板日期" aria-haspopup="dialog" aria-expanded="false">
+              <span class="ui-icon" aria-hidden="true">&#xE787;</span>
+              <span id="dateButtonLabel">选择日期</span>
+            </button>
+            <div class="date-popover" id="datePopover" role="dialog" aria-label="选择看板日期" hidden>
+              <div class="date-popover-head">
+                <div><span>DATE VIEW</span><b>选择年月日</b></div>
+                <button class="icon-button date-close" id="closeDatePicker" type="button" aria-label="关闭日期选择"><span class="ui-icon" aria-hidden="true">&#xE711;</span></button>
+              </div>
+              <label class="date-field" for="dateInput"><span>看板日期</span><input id="dateInput" type="date" /></label>
+              <p class="date-help">只显示该日已保存的小红书帖子快照；无归档日期不会用其他日期补齐。</p>
+              <div class="date-available" id="availableDates"></div>
+              <div class="date-actions">
+                <button class="date-today" id="todayButton" type="button">返回今天</button>
+                <button class="date-apply" id="applyDateButton" type="button">查看该日</button>
+              </div>
+            </div>
+          </div>
+          <button class="history-button" id="historyButton" type="button" aria-label="打开历史验证">
             <span class="ui-icon" aria-hidden="true">&#xE823;</span>
             <span>历史验证</span>
           </button>
-          <button class="refresh-button" id="refreshButton" type="button">
+          <button class="refresh-button" id="refreshButton" type="button" aria-label="刷新今天的数据">
             <span class="ui-icon refresh-icon" aria-hidden="true">&#xE72C;</span>
             <span class="button-label">刷新数据</span>
           </button>
@@ -65,20 +84,28 @@
           <article class="metric">
             <span id="commentsMetricLabel">评论总数</span>
             <strong id="commentsMetric">--</strong>
-            <small>衡量讨论深度</small>
+            <small id="commentsMetricNote">仅统计已补全详情</small>
           </article>
           <article class="metric">
-            <span>看多个股占比</span>
+            <span id="bullMetricLabel">看多个股占比</span>
             <strong id="bullMetric">--</strong>
-            <small>今日已覆盖股票</small>
+            <small id="bullMetricNote">今日已覆盖股票</small>
           </article>
           <article class="metric method-card">
             <div>
               <span>情绪口径</span>
-              <strong>互动加权</strong>
+              <strong>证据门控</strong>
             </div>
             <button class="text-button" id="methodButton" type="button"><span>查看说明</span><span class="ui-icon" aria-hidden="true">&#xE8A7;</span></button>
           </article>
+        </section>
+
+        <section class="quality-strip" id="qualityStrip" aria-label="数据质量">
+          <div class="quality-intro"><span class="quality-dot" id="qualityDot"></span><span><b id="qualityLabel">正在检查证据</b><small id="qualityMessage">加载采集质量与可判定范围</small></span></div>
+          <div class="quality-item"><span>日期有效</span><b id="qualityDate">--</b></div>
+          <div class="quality-item"><span>详情证据</span><b id="qualityEvidence">--</b></div>
+          <div class="quality-item"><span>可用信号</span><b id="qualityEntities">--</b></div>
+          <div class="quality-item"><span>评论覆盖</span><b id="qualityComments">--</b></div>
         </section>
 
         <section class="content-section">
@@ -86,7 +113,7 @@
             <div>
               <span class="section-kicker">SECTOR HEAT</span>
               <h2>热门板块</h2>
-              <p>点击板块，查看今日热门股票 Top 10 与高互动帖子</p>
+              <p id="sectorSectionDescription">点击板块，查看今日热门股票 Top 10 与高互动帖子</p>
             </div>
             <div class="legend"><span><i class="red"></i>看多</span><span><i class="gray"></i>中性</span><span><i class="green"></i>看空</span></div>
           </div>
@@ -98,7 +125,7 @@
             <div>
               <span class="section-kicker">STOCK RANKING</span>
               <h2 id="stockSectionTitle">讨论度最高的 10 只股票</h2>
-              <p>点击任意一行，查看互动量最高的三篇帖子</p>
+              <p id="stockSectionDescription">点击任意一行，查看互动量最高的三篇帖子</p>
             </div>
             <div class="table-filter" role="group" aria-label="情绪筛选">
               <button class="filter active" data-filter="全部" type="button">全部</button>
@@ -143,7 +170,7 @@
         <button class="icon-button" id="closeDrawer" type="button" aria-label="关闭详情"><span class="ui-icon" aria-hidden="true">&#xE711;</span></button>
       </div>
       <div class="drawer-content" id="drawerContent"></div>
-      <div class="drawer-note" id="drawerNote">排序口径：点赞数 + 评论数。情绪由文本关键词与互动量加权，仅供参考。</div>
+      <div class="drawer-note" id="drawerNote">热度按帖子覆盖统计；情绪只由正文、tags 或图片文字证据判断。</div>
     </aside>
 
     <div class="image-viewer" id="imageViewer" role="dialog" aria-modal="true" aria-label="帖子图片预览" hidden>
@@ -160,11 +187,12 @@
         <span class="section-kicker">METHODOLOGY</span>
         <h2 id="methodTitle">这个看板怎么算“情绪”</h2>
         <div class="method-steps">
-          <div><b>01</b><p><strong>采样</strong><span>按板块与股票关键词搜索公开笔记，仅纳入发布日期可验证为北京时间今天的内容。</span></p></div>
-          <div><b>02</b><p><strong>识别</strong><span>结合标题、正文与相关 tags 中的看多/看空语义，输出 -100 至 +100 分。</span></p></div>
-          <div><b>03</b><p><strong>股票热度</strong><span>从标题、正文、tags 与图片 OCR 文字识别股票；按今日提及帖数排序，同一篇帖子重复出现只计一次。</span></p></div>
+          <div><b>01</b><p><strong>采样</strong><span>按板块与股票关键词搜索公开笔记，仅纳入发布日期可验证为所选北京时间日期的内容。</span></p></div>
+          <div><b>02</b><p><strong>证据</strong><span>A 级为正文或 tags，B 级为图片文字，C 级仅标题。C 级只计热度，不判断看多看空。</span></p></div>
+          <div><b>03</b><p><strong>分层</strong><span>1 篇证据显示“线索”，2 篇独立作者显示“初步”；至少 3 篇且来自 2 位作者才升级为正式方向。单篇爆款权重设有上限。</span></p></div>
+          <div><b>04</b><p><strong>股票热度</strong><span>从板块成分股中动态识别股票；按当日提及帖数排序，同一篇帖子重复出现只计一次。</span></p></div>
         </div>
-        <div class="method-caveat">帖子日期无法确认、不是今天或行情时间戳不是今天时，系统会留空而不沿用旧数据。建议下一版增加“情绪置信度”，避免少数爆款帖子过度影响结论。</div>
+        <div class="method-caveat">帖子日期无法确认或不属于所选日期时，系统会留空而不沿用其他日期数据。历史行情不会伪装成当日实时行情。</div>
       </section>
     </div>
 
