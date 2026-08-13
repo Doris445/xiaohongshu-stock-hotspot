@@ -4,6 +4,7 @@ import argparse
 import hmac
 import json
 import mimetypes
+import re
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
@@ -24,7 +25,15 @@ class Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path == "/api/dashboard":
-            self._json(200, SERVICE.current())
+            source_date = (parse_qs(parsed.query).get("date") or [""])[0]
+            if source_date and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", source_date):
+                self._json(400, {"error": "日期格式必须为 YYYY-MM-DD"})
+                return
+            dashboard = SERVICE.dashboard_for_date(source_date) if source_date else SERVICE.current()
+            if dashboard is None:
+                self._json(404, {"error": "该日期没有已归档的小红书帖子"})
+            else:
+                self._json(200, dashboard)
             return
         if path == "/api/health":
             self._json(200, {"ok": True})
@@ -48,7 +57,8 @@ class Handler(BaseHTTPRequestHandler):
         self._static(path)
 
     def do_POST(self) -> None:
-        if urlparse(self.path).path != "/api/refresh":
+        parsed = urlparse(self.path)
+        if parsed.path not in {"/api/refresh", "/api/history/validate"}:
             self._json(404, {"error": "Not found"})
             return
         if settings.refresh_token:
@@ -57,10 +67,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(401, {"error": "刷新令牌无效"})
                 return
         try:
-            data = SERVICE.refresh()
+            if parsed.path == "/api/history/validate":
+                source_date = (parse_qs(parsed.query).get("date") or [""])[0]
+                if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", source_date):
+                    self._json(400, {"error": "日期格式必须为 YYYY-MM-DD"})
+                    return
+                data = SERVICE.validate_midday(source_date)
+            else:
+                data = SERVICE.refresh()
             self._json(200, data)
+        except ValueError as exc:
+            self._json(409, {"error": str(exc)})
         except Exception as exc:
-            self._json(500, {"error": "刷新失败", "detail": str(exc)})
+            self._json(500, {"error": "操作失败", "detail": str(exc)})
 
     def _static(self, request_path: str) -> None:
         relative = unquote(request_path).lstrip("/")

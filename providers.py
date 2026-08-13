@@ -26,6 +26,30 @@ def china_now() -> datetime:
     return datetime.now(CHINA_TZ)
 
 
+def fetch_public_bytes(url: str, timeout: int = 10) -> bytes:
+    """Use bundled Scrapling when available, with a stdlib deployment fallback."""
+    if SCRAPLING_ROOT.exists():
+        import sys
+
+        scrapling_path = str(SCRAPLING_ROOT)
+        if scrapling_path not in sys.path:
+            sys.path.insert(0, scrapling_path)
+    try:
+        from scrapling.fetchers import Fetcher
+
+        return Fetcher.get(url, impersonate="chrome", timeout=timeout).body
+    except Exception:
+        request = Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 SentiBoard/0.1",
+                "Accept": "application/json,text/plain,*/*",
+            },
+        )
+        with urlopen(request, timeout=timeout) as response:
+            return response.read()
+
+
 def parse_xhs_published_date(value: Any, now: datetime | None = None) -> date | None:
     """Parse the date forms returned by Xiaohongshu/OpenCLI.
 
@@ -101,6 +125,16 @@ STOCK_TARGETS = [
     StockTarget("生益科技", "600183", "sh600183", "PCB"),
 ]
 
+
+def stock_symbol(code: str) -> str:
+    """Map an A-share code to Tencent's public quote symbol."""
+    value = str(code or "").strip()
+    if value.startswith(("6", "9")):
+        return f"sh{value}"
+    if value.startswith(("4", "8")):
+        return f"bj{value}"
+    return f"sz{value}"
+
 SECTOR_BOARD_CODES = {
     "半导体": ("BK1036",),
     "CPO": ("BK1128",),
@@ -108,6 +142,13 @@ SECTOR_BOARD_CODES = {
     "PCB": ("BK0877",),
     "AI 算力": ("BK1127", "BK1138"),
     "机器人": ("BK1408",),
+}
+
+INDEX_SYMBOLS = {
+    "sh000001": "上证指数",
+    "sz399001": "深证成指",
+    "sz399006": "创业板指",
+    "sh000688": "科创50",
 }
 
 
@@ -156,6 +197,55 @@ class EastmoneySectorConstituentProvider:
             if merged:
                 sectors[sector] = list(merged.values())
         return sectors
+
+
+class EastmoneySectorQuoteProvider:
+    """Fetch one market snapshot for the dashboard's tracked sector boards."""
+
+    endpoint = (
+        "https://push2delay.eastmoney.com/api/qt/ulist.np/get?"
+        "secids={secids}&fields=f2,f3,f12,f14&fltt=2"
+    )
+
+    def fetch(self) -> dict[str, dict[str, Any]]:
+        if os.environ.get("STOCK_DASHBOARD_DISABLE_NETWORK") == "1":
+            return {}
+        try:
+            boards = [board for values in SECTOR_BOARD_CODES.values() for board in values]
+            url = self.endpoint.format(secids=",".join(f"90.{board}" for board in boards))
+            request = Request(
+                url,
+                headers={
+                    "User-Agent": "Mozilla/5.0 SentiBoard/0.1",
+                    "Accept": "application/json,text/plain,*/*",
+                },
+            )
+            with urlopen(request, timeout=10) as response:
+                payload = json.loads(response.read().decode("utf-8", errors="replace"))
+            rows = payload.get("data", {}).get("diff") or []
+        except Exception:
+            return {}
+        by_board = {str(row["f12"]): row for row in rows}
+        result: dict[str, dict[str, Any]] = {}
+        for sector, boards in SECTOR_BOARD_CODES.items():
+            matched = [by_board[board] for board in boards if board in by_board]
+            if not matched:
+                continue
+            changes = [float(row["f3"]) for row in matched]
+            result[sector] = {
+                "name": sector,
+                "changePct": round(sum(changes) / len(changes), 2),
+                "boards": [
+                    {
+                        "code": str(row.get("f12") or ""),
+                        "name": str(row.get("f14") or ""),
+                        "changePct": float(row["f3"]),
+                    }
+                    for row in matched
+                ],
+                "source": "东方财富板块行情（延迟快照）",
+            }
+        return result
 
 
 class XHSImageOCRProvider:
@@ -348,23 +438,22 @@ class TencentQuoteProvider:
 
     endpoint = "https://qt.gtimg.cn/q={symbols}"
 
-    def fetch(self) -> dict[str, dict[str, float | str]]:
+    def fetch(self, codes: list[str] | None = None) -> dict[str, dict[str, float | str]]:
+        symbols = [stock_symbol(code) for code in codes] if codes else [t.symbol for t in STOCK_TARGETS]
+        return self.fetch_symbols(symbols)
+
+    def fetch_symbols(
+        self, symbols: list[str]
+    ) -> dict[str, dict[str, float | str | int | None]]:
         if os.environ.get("STOCK_DASHBOARD_DISABLE_NETWORK") == "1":
             return {}
 
-        if SCRAPLING_ROOT.exists():
-            import sys
-
-            scrapling_path = str(SCRAPLING_ROOT)
-            if scrapling_path not in sys.path:
-                sys.path.insert(0, scrapling_path)
-
         try:
-            from scrapling.fetchers import Fetcher
-
-            url = self.endpoint.format(symbols=",".join(t.symbol for t in STOCK_TARGETS))
-            response = Fetcher.get(url, impersonate="chrome", timeout=10)
-            raw = response.body.decode("gbk", errors="ignore")
+            symbols = [symbol for symbol in dict.fromkeys(symbols) if len(symbol) == 8]
+            if not symbols:
+                return {}
+            url = self.endpoint.format(symbols=",".join(symbols))
+            raw = fetch_public_bytes(url).decode("gbk", errors="ignore")
         except Exception:
             return {}
 
@@ -387,6 +476,8 @@ class TencentQuoteProvider:
                     "changePct": round(change, 2),
                     "quoteAt": fields[30] if len(fields) > 30 else "",
                     "quoteDate": self._quote_date(fields[30] if len(fields) > 30 else ""),
+                    "volume": int(float(fields[6])) if len(fields) > 6 and fields[6] else None,
+                    "source": "腾讯行情",
                 }
             except (ValueError, IndexError):
                 continue
@@ -520,35 +611,66 @@ class AgentReachXHSProvider:
         self,
         query_specs: list[dict[str, Any]],
         limit: int = 10,
-        detail_limit: int = 3,
+        detail_limit: int = 12,
         known_posts: dict[str, dict[str, Any]] | None = None,
+        reuse_discovery: bool = False,
     ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         if os.environ.get("STOCK_DASHBOARD_DISABLE_NETWORK") == "1":
-            return [], {"status": "off", "backend": None, "message": "测试模式未访问小红书"}
+            return [], {
+                "status": "off", "backend": None, "message": "测试模式未访问小红书",
+                "platformRequestAttempted": False, "requestCount": 0,
+            }
 
         state = self.status()
         backend = state.get("backend")
         if not backend:
-            return [], state
+            return [], {**state, "platformRequestAttempted": False, "requestCount": 0}
 
         if backend != "OpenCLI" or not self._opencli_prefix():
-            return [], {**state, "message": f"已识别 {backend}，当前 MVP 暂未启用该适配器"}
+            return [], {
+                **state, "message": f"已识别 {backend}，当前 MVP 暂未启用该适配器",
+                "platformRequestAttempted": False, "requestCount": 0,
+            }
 
-        posts: list[dict[str, Any]] = []
         known_posts = known_posts or {}
-        seen_urls: set[str] = set()
+        posts_by_url: dict[str, dict[str, Any]] = {}
         successful_queries = 0
         stopped_for_safety = False
         rejected_non_today = 0
+        search_requests = 0
+        detail_requests = 0
         ocr_images_processed = 0
         ocr_images_skipped = 0
         ocr_images_examined = 0
         ocr_posts_processed = 0
-        for spec in query_specs:
+
+        if reuse_discovery:
+            for url, known in known_posts.items():
+                if not url or not is_xhs_post_today(known):
+                    continue
+                candidate = dict(known)
+                candidate["url"] = url
+                if not candidate.get("matchedTargets"):
+                    candidate["matchedTargets"] = [
+                        {
+                            "targetType": candidate.get("targetType"),
+                            "targetName": candidate.get("targetName"),
+                            "query": candidate.get("query"),
+                        }
+                    ]
+                candidate["needsDetail"] = not bool(
+                    candidate.get("isDetailed")
+                    and (str(candidate.get("content") or "").strip() or candidate.get("tags"))
+                )
+                posts_by_url[url] = candidate
+
+        # Stage 1: discover broadly. Detail requests are selected only after all
+        # searches finish, so one popular note cannot consume every query's budget.
+        for spec in ([] if reuse_discovery else query_specs):
             query = spec["query"]
-            spec_detail_limit = max(0, int(spec.get("detailLimit", detail_limit)))
             try:
                 self._pace_platform_request()
+                search_requests += 1
                 result = self._run_opencli(
                     [
                         "xiaohongshu",
@@ -570,22 +692,37 @@ class AgentReachXHSProvider:
                     raw_candidates = self._normalize_search_result(result.stdout, spec, limit)
                     candidates = [post for post in raw_candidates if is_xhs_post_today(post)]
                     rejected_non_today += len(raw_candidates) - len(candidates)
-                    unique_candidates: list[dict[str, Any]] = []
                     for candidate in candidates:
                         url = candidate.get("url") or ""
-                        if url and url in seen_urls:
+                        if not url:
                             continue
-                        if url:
-                            seen_urls.add(url)
+                        target = {
+                            "targetType": spec.get("targetType"),
+                            "targetName": spec.get("targetName"),
+                            "query": spec.get("query"),
+                        }
+                        existing = posts_by_url.get(url)
+                        if existing:
+                            contexts = existing.setdefault("matchedTargets", [])
+                            if target not in contexts:
+                                contexts.append(target)
+                            existing["likes"] = max(int(existing.get("likes") or 0), int(candidate.get("likes") or 0))
+                            continue
                         known = known_posts.get(url)
                         if known:
                             current_likes = candidate["likes"]
                             previous_likes = _to_int(known.get("likes"))
+                            known_comments_available = bool(
+                                known.get("commentCountAvailable")
+                                if "commentCountAvailable" in known
+                                else known.get("isDetailed") and known.get("comments") is not None
+                            )
                             candidate = {
                                 **known,
                                 **candidate,
                                 "content": known.get("content", ""),
-                                "comments": _to_int(known.get("comments")),
+                                "comments": known.get("comments") if known_comments_available else None,
+                                "commentCountAvailable": known_comments_available,
                                 "collects": _to_int(known.get("collects")),
                                 "tags": known.get("tags") or [],
                                 "isDetailed": bool(known.get("isDetailed")),
@@ -593,80 +730,110 @@ class AgentReachXHSProvider:
                             threshold = max(20, round(previous_likes * 0.2))
                             candidate["needsDetail"] = (
                                 not candidate["isDetailed"]
-                                or not candidate.get("images")
                                 or abs(current_likes - previous_likes) >= threshold
                             )
                         else:
                             candidate["needsDetail"] = True
-                        unique_candidates.append(candidate)
-                    candidates = unique_candidates
+                        candidate["matchedTargets"] = [target]
+                        posts_by_url[url] = candidate
                     successful_queries += 1
-                    ranked = sorted(candidates, key=lambda post: post["likes"], reverse=True)
-                    # Only inspect the actual Top-N results. Cached detail is
-                    # reused, and a network detail request is made solely when
-                    # one of those leaders is new or materially changed.
-                    for post in ranked[:spec_detail_limit]:
-                        if not post.get("url"):
-                            continue
-                        if not post.get("needsDetail"):
-                            continue
-                        self._pace_platform_request()
-                        detail, safety_stop = self._collect_detail_with_images(post["url"])
-                        if safety_stop:
-                            stopped_for_safety = True
-                            break
-                        if detail:
-                            post.update(detail)
-                            post["isDetailed"] = True
-                            post["detailFetchedAt"] = time.time()
-                    for post in ranked[:spec_detail_limit]:
-                        if not post.get("images") or post.get("imageOcrText"):
-                            continue
-                        if ocr_posts_processed >= 12:
-                            break
-                        remaining = 24 - ocr_images_examined
-                        if remaining <= 0:
-                            break
-                        ocr_text, image_count, skipped_count, ocr_status = self.ocr_provider.extract(
-                            post.get("images") or [],
-                            max_images=min(4, remaining),
-                        )
-                        post["imageOcrText"] = ocr_text
-                        post["ocrImageCount"] = image_count
-                        post["ocrSkippedImageCount"] = skipped_count
-                        post["ocrStatus"] = ocr_status
-                        post["ocrSampledAt"] = time.time()
-                        ocr_images_processed += image_count
-                        ocr_images_skipped += skipped_count
-                        ocr_images_examined += image_count + skipped_count
-                        if image_count:
-                            ocr_posts_processed += 1
-                    for post in candidates:
-                        post.pop("needsDetail", None)
-                    posts.extend(candidates)
-                    if stopped_for_safety:
-                        break
             except (OSError, subprocess.TimeoutExpired):
                 stopped_for_safety = True
                 break
-        # Release the single background detail tab after the batch. This is a
-        # local browser cleanup and does not issue another Xiaohongshu request.
-        try:
-            self._run_opencli(
-                ["browser", self.DETAIL_SESSION, "close", "--window", "background"],
-                timeout=10,
+
+        posts = list(posts_by_url.values())
+        selected = self._select_detail_candidates(posts, query_specs, max(0, int(detail_limit)))
+        # Stage 2: globally selected text enrichment. Always use the stable
+        # note adapter first. Optional image reading must never prevent the
+        # remaining notes from getting正文/tags evidence.
+        for post in selected:
+            if stopped_for_safety or not post.get("needsDetail"):
+                continue
+            try:
+                self._pace_platform_request()
+                detail_requests += 1
+                detail, safety_stop = self._collect_note_detail(post["url"])
+                if safety_stop:
+                    stopped_for_safety = True
+                    break
+                if detail:
+                    post.update(detail)
+                    post["isDetailed"] = True
+                    post["commentCountAvailable"] = True
+                    post["detailFetchedAt"] = time.time()
+            except (OSError, subprocess.TimeoutExpired):
+                stopped_for_safety = True
+                break
+
+        # Stage 3: attempt image URLs for at most two already-detailed leaders.
+        # A page-specific image failure is non-fatal because the text evidence
+        # above is already valid and the rest of the batch must be preserved.
+        image_candidates = [post for post in selected if post.get("isDetailed")][:1]
+        image_session_used = False
+        for post in image_candidates:
+            try:
+                self._pace_platform_request()
+                detail_requests += 1
+                image_session_used = True
+                image_detail, _ = self._collect_detail_with_images(post["url"])
+                if image_detail.get("images"):
+                    post["images"] = image_detail["images"]
+            except (OSError, subprocess.TimeoutExpired):
+                break
+        if image_session_used:
+            try:
+                self._run_opencli(
+                    ["browser", self.DETAIL_SESSION, "close", "--window", "background"],
+                    timeout=10,
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+
+        # OCR is local and only runs for globally selected image-bearing notes.
+        for post in selected:
+            if not post.get("images") or post.get("imageOcrText"):
+                continue
+            if ocr_posts_processed >= 12:
+                break
+            remaining = 24 - ocr_images_examined
+            if remaining <= 0:
+                break
+            ocr_text, image_count, skipped_count, ocr_status = self.ocr_provider.extract(
+                post.get("images") or [], max_images=min(4, remaining)
             )
-        except (OSError, subprocess.TimeoutExpired):
-            pass
-        if not successful_queries:
+            post.update(
+                {
+                    "imageOcrText": ocr_text,
+                    "ocrImageCount": image_count,
+                    "ocrSkippedImageCount": skipped_count,
+                    "ocrStatus": ocr_status,
+                    "ocrSampledAt": time.time(),
+                }
+            )
+            ocr_images_processed += image_count
+            ocr_images_skipped += skipped_count
+            ocr_images_examined += image_count + skipped_count
+            if image_count:
+                ocr_posts_processed += 1
+
+        for post in posts:
+            post.pop("needsDetail", None)
+
+        if not successful_queries and not posts:
             message = "触发安全停止：未重试，请检查验证码或登录状态" if stopped_for_safety else "OpenCLI 已连接，但小红书检索失败"
-            return [], {**state, "status": "warn", "message": message}
+            return [], {
+                **state, "status": "warn", "message": message,
+                "platformRequestAttempted": search_requests > 0,
+                "requestCount": search_requests + detail_requests,
+                "searchRequests": search_requests, "detailRequests": detail_requests,
+            }
         return posts, {
             **state,
             "status": "ok",
             "backend": "OpenCLI",
             "message": (
-                f"今日低频采样完成 {successful_queries} 组检索；纳入 {len(posts)} 帖，"
+                (f"复用今日 {len(posts)} 篇搜索结果并补全详情；" if reuse_discovery else f"今日低频采样完成 {successful_queries} 组检索；纳入 {len(posts)} 帖，")
+                +
                 f"本地 OCR 处理 {ocr_images_processed} 张有文字图片、跳过 {ocr_images_skipped} 张无文字图片，"
                 f"剔除 {rejected_non_today} 条非今日或日期不明内容"
                 + ("；检测到异常后已停止，未自动重试" if stopped_for_safety else "")
@@ -674,11 +841,60 @@ class AgentReachXHSProvider:
             "dataDate": china_now().date().isoformat(),
             "acceptedToday": len(posts),
             "rejectedNonToday": rejected_non_today,
+            "platformRequestAttempted": (search_requests + detail_requests) > 0,
+            "requestCount": search_requests + detail_requests,
+            "searchRequests": search_requests,
+            "detailRequests": detail_requests,
+            "selectedForDetail": len(selected),
+            "detailedPosts": sum(bool(post.get("isDetailed")) for post in posts),
+            "discoveryMode": "reused" if reuse_discovery else "searched",
             "ocrPosts": sum(bool(post.get("imageOcrText")) for post in posts),
             "ocrImages": sum(int(post.get("ocrImageCount") or 0) for post in posts),
             "ocrSkippedImages": sum(int(post.get("ocrSkippedImageCount") or 0) for post in posts),
             "ocrStatus": self.ocr_provider._status,
         }
+
+    @staticmethod
+    def _select_detail_candidates(
+        posts: list[dict[str, Any]], query_specs: list[dict[str, Any]], limit: int
+    ) -> list[dict[str, Any]]:
+        """Choose a diverse global detail set before spending platform requests."""
+        if limit <= 0:
+            return []
+        ranked = sorted(
+            posts,
+            key=lambda post: (bool(post.get("needsDetail", True)), int(post.get("likes") or 0)),
+            reverse=True,
+        )
+        selected: list[dict[str, Any]] = []
+        selected_urls: set[str] = set()
+        for spec in query_specs:
+            target_type = spec.get("targetType")
+            target_name = spec.get("targetName")
+            candidate = next(
+                (
+                    post for post in ranked
+                    if post.get("url") not in selected_urls
+                    and any(
+                        target.get("targetType") == target_type and target.get("targetName") == target_name
+                        for target in (post.get("matchedTargets") or [])
+                    )
+                ),
+                None,
+            )
+            if candidate:
+                selected.append(candidate)
+                selected_urls.add(candidate["url"])
+            if len(selected) >= limit:
+                return selected
+        for post in ranked:
+            if post.get("url") in selected_urls:
+                continue
+            selected.append(post)
+            selected_urls.add(post["url"])
+            if len(selected) >= limit:
+                break
+        return selected
 
     def _pace_platform_request(self) -> None:
         elapsed = time.monotonic() - self._last_platform_request
@@ -716,6 +932,23 @@ class AgentReachXHSProvider:
             return {}, True
         return detail, False
 
+    def _collect_note_detail(self, url: str) -> tuple[dict[str, Any], bool]:
+        """Read note text/tags/counts without requesting any comment body."""
+        result = self._run_opencli(
+            ["xiaohongshu", "note", url, "--window", "background", "-f", "json"],
+            timeout=60,
+        )
+        # On Windows a .cmd shim may return code 1 after successfully printing
+        # the note because '&xsec_source=' in the signed URL is interpreted by
+        # cmd.exe. Preserve valid structured output before evaluating the code.
+        if result.stdout.strip():
+            detail = self._normalize_detail(result.stdout)
+            if detail:
+                return detail, False
+        if self._requires_safety_stop(result):
+            return {}, True
+        return {}, False
+
     @staticmethod
     def _requires_safety_stop(result: subprocess.CompletedProcess[str]) -> bool:
         if result.returncode == 0:
@@ -727,7 +960,7 @@ class AgentReachXHSProvider:
     @classmethod
     def _opencli_prefix(cls) -> list[str]:
         executable = shutil.which("opencli.cmd") or shutil.which("opencli")
-        if executable:
+        if executable and os.name != "nt":
             return [executable]
 
         agent_reach_home = Path(
@@ -751,7 +984,9 @@ class AgentReachXHSProvider:
                 *agent_reach_home.glob("tools/node*/bin/node"),
             ]
             node = str(candidates[0]) if candidates else None
-        return [str(node), str(entry)] if node and entry.is_file() else []
+        if node and entry.is_file():
+            return [str(node), str(entry)]
+        return [executable] if executable else []
 
     @classmethod
     def _run_opencli(cls, args: list[str], timeout: int) -> subprocess.CompletedProcess[str]:
@@ -796,7 +1031,8 @@ class AgentReachXHSProvider:
                     "content": card.get("desc") or card.get("content") or "",
                     "author": user.get("nickname") or card.get("author") or "小红书用户",
                     "likes": _to_int(interact.get("liked_count") or interact.get("likedCount") or card.get("likes")),
-                    "comments": _to_int(interact.get("comment_count") or interact.get("commentCount") or card.get("comments")),
+                    "comments": None,
+                    "commentCountAvailable": False,
                     "url": card.get("url") or item.get("url") or "",
                     "published": (
                         card.get("published_at")
@@ -820,7 +1056,22 @@ class AgentReachXHSProvider:
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError:
-            return {}
+            # OpenCLI site adapters may emit YAML even when the global format
+            # flag is lost behind a Windows .cmd signed-URL boundary.
+            yaml_fields: dict[str, str] = {}
+            for match in re.finditer(
+                r"^-\s*field:\s*([^\r\n]+)\r?\n\s+value:\s*([^\r\n]*)",
+                raw,
+                flags=re.MULTILINE,
+            ):
+                key = match.group(1).strip()
+                value = match.group(2).strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+                    value = value[1:-1].replace("''", "'")
+                yaml_fields[key] = value
+            if not yaml_fields:
+                return {}
+            payload = yaml_fields
 
         if isinstance(payload, list):
             fields = {
@@ -834,13 +1085,18 @@ class AgentReachXHSProvider:
             return {}
 
         tags_value = fields.get("tags") or ""
-        tags = [tag.strip().lstrip("#") for tag in re.split(r"[,，]", str(tags_value)) if tag.strip()]
+        tags = [
+            tag.strip().lstrip("#")
+            for tag in re.split(r"[,，]|\s+(?=#)", str(tags_value))
+            if tag.strip().lstrip("#")
+        ]
         normalized = {
             "title": fields.get("title") or "未命名笔记",
             "content": fields.get("content") or "",
             "author": fields.get("author") or "小红书用户",
             "likes": _to_int(fields.get("likes")),
             "comments": _to_int(fields.get("comments")),
+            "commentCountAvailable": True,
             "collects": _to_int(fields.get("collects")),
             "tags": tags,
         }
@@ -887,6 +1143,7 @@ class AgentReachXHSProvider:
             "author": payload.get("author") or "小红书用户",
             "likes": _to_int(payload.get("likes")),
             "comments": _to_int(payload.get("comments")),
+            "commentCountAvailable": True,
             "collects": _to_int(payload.get("collects")),
             "tags": [str(tag).lstrip("#") for tag in (payload.get("tags") or []) if str(tag).strip()],
             "images": list(dict.fromkeys(images))[:12],
